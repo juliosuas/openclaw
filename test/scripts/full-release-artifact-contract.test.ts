@@ -33,6 +33,7 @@ import {
 } from "../../scripts/full-release-validation-policy.mjs";
 import { tryReadReleaseDecisionArtifact } from "../../scripts/release-ci-summary.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createManifestPublicationFixture } from "./full-release-manifest.test-support.js";
 
 const SHA = "a".repeat(40);
 
@@ -205,7 +206,7 @@ describe("retained publication admission", () => {
 
   it.each(["beta", "stable"])(
     "writes fresh %s performance and Telegram evidence through the actual workflow command",
-    (releaseProfile) => {
+    async (releaseProfile) => {
       const telegram = {
         npm_telegram_package_spec: "openclaw@2026.9.9",
         npm_telegram_provider_mode: "live-frontier",
@@ -223,6 +224,11 @@ describe("retained publication admission", () => {
         (step: { name: string }) => step.name === "Write release validation manifest",
       );
       const directory = directories.make("publication-fresh-manifest-");
+      const publication = await createManifestPublicationFixture(directory, {
+        targetSha: context.targetRef,
+        workflowSha: context.workflowSha,
+        workflowFullRef: context.workflowFullRef,
+      });
       const planPath = join(directory, "plan.json");
       const drainPath = join(directory, "drain.json");
       writeFileSync(planPath, serializeReleaseArtifact(plan));
@@ -261,7 +267,6 @@ describe("retained publication admission", () => {
         env: {
           ...Object.fromEntries(Object.keys(writer.env).map((key) => [key, ""])),
           ...selectedEnv,
-          PATH: process.env.PATH,
           RUNNER_TEMP: directory,
           GITHUB_RUN_ID: context.runId,
           GITHUB_RUN_ATTEMPT: context.runAttempt,
@@ -274,6 +279,7 @@ describe("retained publication admission", () => {
           RUN_RELEASE_SOAK: context.runReleaseSoak,
           RELEASE_EXECUTION_PLAN_PATH: planPath,
           DIAGNOSTIC_DRAIN_PATH: drainPath,
+          ...publication.env,
         },
       });
       expect(result.status, result.stderr).toBe(0);
@@ -285,10 +291,10 @@ describe("retained publication admission", () => {
       );
       expect(manifest.releaseProfile).toBe(releaseProfile);
       expect(manifest.controls).toMatchObject({
-        performanceBlocking: releaseProfile !== "beta",
+        performanceBlocking: false,
         performanceReportPublication: "artifact-only",
       });
-      expect(manifest.childRuns.productPerformance.blocking).toBe(releaseProfile !== "beta");
+      expect(manifest.childRuns.productPerformance.blocking).toBe(false);
       expect(manifest.validationInputs).toMatchObject({
         npmTelegramPackageSpec: "openclaw@2026.9.9",
         npmTelegramProviderMode: "live-frontier",
@@ -297,6 +303,7 @@ describe("retained publication admission", () => {
         allowUnreleasedChangelog: "true",
       });
       expect(manifest.publicationAdmission).toEqual(plan.publicationAdmission);
+      publication.expectSealed(manifest);
     },
   );
 
@@ -1118,7 +1125,7 @@ describe("full release artifact contract", () => {
     { reuse: true, source: true },
   ])(
     "writes all matrix evidence with reuse=$reuse source=$source without argv size limits",
-    ({ reuse, source }) => {
+    async ({ reuse, source }) => {
       const workflow = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
       const writer = workflow.jobs.summary.steps.find(
         (entry: { name: string }) => entry.name === "Write release validation manifest",
@@ -1202,6 +1209,7 @@ describe("full release artifact contract", () => {
         ...(source
           ? { sourceAdmissionContract: "1", sourceAdmission: oldSource, trustedWorkflow }
           : {}),
+        workflowName: "Full Release Validation",
         releaseProfile: source ? "full" : "stable",
         rerunGroup: "all",
         runReleaseSoak: "true",
@@ -1240,6 +1248,13 @@ describe("full release artifact contract", () => {
         },
       };
       const dir = tempDirs.make("full-release-manifest-");
+      const publication = source
+        ? await createManifestPublicationFixture(dir, {
+            targetSha: SHA,
+            workflowSha: "d".repeat(40),
+            workflowFullRef: "refs/heads/release-ci/test",
+          })
+        : undefined;
       const planPath = join(dir, "plan.json");
       const drainPath = join(dir, "drain.json");
       writeFileSync(planPath, serializeReleaseArtifact(plan));
@@ -1249,7 +1264,6 @@ describe("full release artifact contract", () => {
         env: {
           ...Object.fromEntries(Object.keys(writer.env).map((key) => [key, ""])),
           EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: "[]",
-          PATH: process.env.PATH,
           RUNNER_TEMP: dir,
           GITHUB_RUN_ID: "124",
           GITHUB_RUN_ATTEMPT: "2",
@@ -1270,6 +1284,7 @@ describe("full release artifact contract", () => {
           RUN_RELEASE_SOAK: "true",
           RELEASE_EXECUTION_PLAN_PATH: planPath,
           DIAGNOSTIC_DRAIN_PATH: drainPath,
+          ...(publication?.env ?? { PATH: process.env.PATH }),
         },
       });
       expect(result.status, result.stderr).toBe(0);
@@ -1279,6 +1294,7 @@ describe("full release artifact contract", () => {
       );
       expect(Buffer.byteLength(bytes)).toBeLessThan(MAX_RELEASE_ARTIFACT_BYTES);
       const manifest = JSON.parse(bytes);
+      publication?.expectSealed(manifest);
       if (source) {
         expect(
           validatePublicationSourceBinding(manifest, { sourceAdmissionContract: "1" }),
