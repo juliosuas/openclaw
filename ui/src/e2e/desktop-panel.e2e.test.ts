@@ -289,17 +289,11 @@ suite.define(() => {
 
   it("shows direct-target status failure without observing or falling back", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      const sessions = sessionsList("active");
-      const [session] = sessions.sessions;
       const gateway = await installMockGateway(page, {
         featureMethods: ["desktop.observe", "environments.list"],
         methodResponses: {
-          "sessions.list": {
-            ...sessions,
-            sessions: [
-              { ...session, placement: { state: "active", environmentId: "other-worker" } },
-            ],
-          },
+          // Keep automatic discovery off; the explicit worker still differs from the session target.
+          "sessions.list": sessionsList("local"),
           "environments.status": {
             __mockError: {
               code: "UNAVAILABLE",
@@ -329,8 +323,10 @@ suite.define(() => {
       await panel.getByRole("button", { name: "Retry", exact: true }).click();
 
       await expect
-        .poll(async () => (await gateway.getRequests("environments.status")).length)
-        .toBe(2);
+        .poll(async () =>
+          (await gateway.getRequests("environments.status")).map((request) => request.params),
+        )
+        .toEqual([{ environmentId: "worker-desktop-1" }, { environmentId: "worker-desktop-1" }]);
       const observeRequest = await gateway.waitForRequest("desktop.observe");
       expect(observeRequest.params).toEqual({
         source: { kind: "environment", environmentId: "worker-desktop-1" },
