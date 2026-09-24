@@ -1,12 +1,14 @@
 import Foundation
 import Testing
+@testable import OpenClaw
 
 struct CloudflareAccessTransferTests {
     // Produced by Go 1.26.4, golang.org/x/crypto/nacl/box v0.53.0, matching
     // cloudflared fe70e951a3c52d92abf9f6c4248e32937b2f42fc. All keys are test-only.
     private let secret = Array(UInt8(0)...UInt8(31))
     private let peer = "eaYx7t4b-cmPEgMs3q3Q56B5OY_HhriMyEbsia-FpRo="
-    private let body = "4OHi4+Tl5ufo6err7O3u7/Dx8vP09fb3mUfpSI3NujJScq2SSYTNjPQHWD/4rcDtGZ4aXmZQQKiucDTkbzLbxWfGKrd5AcTTDtoyjAmnEygNkAiq9mC4Ma37GxgCkQhrX0liw7+6uoTpq9n5Rg=="
+    private let body = "4OHi4+Tl5ufo6err7O3u7/Dx8vP09fb3mUfpSI3NujJScq2SSYTNjPQHWD/4rcDtGZ4aXmZQQKiucDTkbz"
+        + "LbxWfGKrd5AcTTDtoyjAmnEygNkAiq9mC4Ma37GxgCkQhrX0liw7+6uoTpq9n5Rg=="
 
     @Test func `decrypts the Go transfer fixture with distinct base64 alphabets`() throws {
         let token = try CloudflareAccessTransfer.appToken(
@@ -128,7 +130,8 @@ struct CloudflareAccessTransferTests {
 
     @Test(arguments: [
         "YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3tnpip9KPq9XQpBI5GjPt0k4=",
-        "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaX4yew9i53b9+4rxh5Ix7UWTihTHI/Vzb1WO5a6ObFvXw7ZG9HhfL+6JQZgxuOPpv/heDdWETPVFwnFCVEpX6KUrs=",
+        "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaX4yew9i53b9+4rxh5Ix7UWTihTHI/Vzb1WO5a6ObFvXw7ZG9HhfL+6JQ"
+            + "ZgxuOPpv/heDdWETPVFwnFCVEpX6KUrs=",
         "oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3udaJ6+8j8qaBZ7chKhIfXXKQgJRQ6OV5HOolnKdfDc/aXVQJ1Ra+UQCWuNZQcQ5PFktF",
     ])
     func `rejects authenticated malformed transfer payloads`(body: String) {
@@ -167,7 +170,8 @@ struct CloudflareAccessTransferTests {
         #expect(query["send_org_token"] == "true")
         #expect(query["edge_token_transfer"] == "true")
         #expect(query["close_interstitial"] == "true")
-        let redirectString = try #require(query["redirect_url"] ?? nil)
+        let redirectValue = try #require(query["redirect_url"])
+        let redirectString = try #require(redirectValue)
         let redirect = try #require(URL(string: redirectString))
         #expect(application.origin.contains(redirect))
         #expect(CloudflareAccessTransfer.transferURL(publicKey: publicKey).host == "login.cloudflareaccess.org")
@@ -204,7 +208,9 @@ struct CloudflareAccessTransferTests {
             }
             let url = try #require(request.url)
             let response = try #require(HTTPURLResponse(
-                url: url, statusCode: 200, httpVersion: nil,
+                url: url,
+                statusCode: 200,
+                httpVersion: nil,
                 headerFields: self.peer.map { ["service-public-key": $0] }))
             return (self.data, response)
         }

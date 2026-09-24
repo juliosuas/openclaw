@@ -275,12 +275,10 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
     expect(tests).toHaveLength(1);
     expect(tests[0]?.args).toContain("platform=iOS Simulator,id=watch-fixture");
     expect(tests[0]?.args.filter((arg) => arg.startsWith("-only-testing:"))).toEqual(
-      authClasses.map((name) => `-only-testing:OpenClawLogicTests/${name}`),
+      authClasses.map((name) => `-only-testing:OpenClawTests/${name}`),
     );
     for (const name of authClasses) {
-      expect(readFileSync(`apps/ios/Tests/Logic/${name}.swift`, "utf8")).toContain(
-        `struct ${name}`,
-      );
+      expect(readFileSync(`apps/ios/Tests/${name}.swift`, "utf8")).toContain(`struct ${name}`);
     }
   });
 
@@ -293,7 +291,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
     expect(tests).toHaveLength(2);
     expect(tests[0]?.args).toEqual(
       expect.arrayContaining([
-        ...authClasses.map((name) => `-only-testing:OpenClawLogicTests/${name}`),
+        ...authClasses.map((name) => `-only-testing:OpenClawTests/${name}`),
         "-only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests",
         "-only-testing:OpenClawTests/NodeAppModelInvokeTests",
         "-only-testing:OpenClawTests/OpenClawTypographyTests",

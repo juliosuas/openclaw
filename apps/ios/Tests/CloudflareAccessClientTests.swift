@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+@testable import OpenClaw
 
 struct CloudflareAccessClientTests {
     private actor Requests {
@@ -64,7 +65,8 @@ struct CloudflareAccessClientTests {
                 self.response(origin.url, 403, headers: headers),
                 origin: origin))
         }
-        let valid = "Cloudflare-Access resource_metadata=\"\(origin.url.absoluteString)/.well-known/cloudflare-access-protected-resource/\""
+        let valid = "Cloudflare-Access resource_metadata=\"\(origin.url.absoluteString)"
+            + "/.well-known/cloudflare-access-protected-resource/\""
         #expect(try CloudflareAccessClient.isChallenge(
             self.response(origin.url, 302, headers: ["WWW-Authenticate": valid]), origin: origin))
         #expect(try !CloudflareAccessClient.isChallenge(
@@ -96,7 +98,8 @@ struct CloudflareAccessClientTests {
         ])
         let gatewayURL = try #require(URL(string: "\(scheme)://gateway.example.test:8443\(path)"))
         let expectedURL = try #require(URL(string: application.origin.url.absoluteString + (path.isEmpty ? "/" : path)))
-        let challenge = "Cloudflare-Access resource_metadata=\"\(application.origin.url.absoluteString)/.well-known/cloudflare-access-protected-resource\(path)\""
+        let challenge = "Cloudflare-Access resource_metadata=\"\(application.origin.url.absoluteString)"
+            + "/.well-known/cloudflare-access-protected-resource\(path)\""
         let requests = try Requests([
             (Data(), self.response(expectedURL, 302, headers: ["WWW-Authenticate": challenge])),
             (Data(), self.response(expectedURL, 200, headers: ["Cf-Access-Metadata": metadata])),
