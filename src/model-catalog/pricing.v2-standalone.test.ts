@@ -37,6 +37,9 @@ beforeEach(() => {
           modelCatalog: {
             providers: { vendor: { models: [{ id: "catalogued" }, { id: "rowpriced" }] } },
           },
+          modelIdNormalization: {
+            providers: { vendor: { aliases: { "catalogued-latest": "catalogued" } } },
+          },
         },
         {
           id: "owner",
@@ -80,6 +83,8 @@ beforeEach(() => {
           "vendor/litellm-only": { input: 1, output: 3, source: "liteLLM" },
           // A mirror's unflagged upstream rate for a vendor model with an unknown row.
           "vendor/catalogued": { input: 5, output: 10, source: "openRouter" },
+          // An unflagged rate under an alias of that unknown row.
+          "vendor/catalogued-latest": { input: 6, output: 11, source: "openRouter" },
           // A reseller's promotional rate for a vendor model that has its own catalog row.
           "vendor/rowpriced": {
             input: 2,

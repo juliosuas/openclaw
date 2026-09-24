@@ -94,9 +94,12 @@ function buildPricingContext(
     return buildModelCatalogRef(providerId, normalizeModel(providerId, model.trim()));
   };
   const catalog = new Map<string, PricingValue>();
+  const rowKeys = new Set<string>();
   for (const row of planEffectiveModelCatalogRows({ registry, config }).rows) {
+    const ref = buildModelCatalogRef(row.provider, row.id);
+    rowKeys.add(ref);
     if (row.cost) {
-      catalog.set(buildModelCatalogRef(row.provider, row.id), row.cost);
+      catalog.set(ref, row.cost);
     }
   }
   const policies = new Map<string, ExternalPricingPolicy>();
@@ -135,6 +138,11 @@ function buildPricingContext(
   const normalizedHosted = new Map<string, RemoteModelCatalogPrice>();
   for (const [key, pricing] of policyFree.toSorted(([a], [b]) => a.localeCompare(b))) {
     const normalized = normalizedHostedKey(key, normalizeKey);
+    // A catalog row owns its key: an alias (`grok-4.5-latest`) must not price an unknown
+    // or withdrawn row, matching the publisher, which drops alias keys of catalog rows.
+    if (normalized && normalized !== key && rowKeys.has(normalized)) {
+      continue;
+    }
     if (normalized && !normalizedHosted.has(normalized)) {
       normalizedHosted.set(normalized, pricing);
     }
