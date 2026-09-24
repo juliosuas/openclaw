@@ -36,12 +36,13 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SHA = "a".repeat(40);
 
-function registryEvidence(
-  runId = "123",
-  warningCount = 0,
-  validationInputs: Record<string, string> = {},
+function publicationSourceFixture(
+  runId: string,
+  validationInputs: Record<string, string>,
+  validationPurpose: "publish" | "diagnostic" = "publish",
 ) {
-  const source = createPublicationSourceFact(
+  const publishing = validationPurpose === "publish";
+  return createPublicationSourceFact(
     publicationSourceRequest({
       PUBLICATION_INPUTS_JSON: JSON.stringify({
         ref: SHA,
@@ -49,14 +50,16 @@ function registryEvidence(
         rerun_group: "all",
         ...validationInputs,
         trusted_workflow_json: publicationDispatchEnvelope(null, {
-          validationPurpose: "publish",
-          publicationSelection: {
-            route: "normal",
-            npmDistTag: "latest",
-            publishOpenclawNpm: true,
-            pluginPublishScope: "all-publishable",
-            plugins: [],
-          },
+          validationPurpose,
+          publicationSelection: publishing
+            ? {
+                route: "normal",
+                npmDistTag: "latest",
+                publishOpenclawNpm: true,
+                pluginPublishScope: "all-publishable",
+                plugins: [],
+              }
+            : null,
         }),
       }),
       PUBLICATION_TOOLING_JSON: JSON.stringify({ fullRef: "refs/heads/main", sha: SHA }),
@@ -68,13 +71,23 @@ function registryEvidence(
       GITHUB_RUN_ID: runId,
       GITHUB_RUN_ATTEMPT: "1",
     }),
-    { packages: [], platforms: [] },
-    {
-      version: "2026.9.9",
-      packages: [{ name: "openclaw", version: "2026.9.9", targets: ["npm"] }],
-      platforms: [],
-    },
+    publishing ? { packages: [], platforms: [] } : null,
+    publishing
+      ? {
+          version: "2026.9.9",
+          packages: [{ name: "openclaw", version: "2026.9.9", targets: ["npm"] }],
+          platforms: [],
+        }
+      : null,
   );
+}
+
+function registryEvidence(
+  runId = "123",
+  warningCount = 0,
+  validationInputs: Record<string, string> = {},
+) {
+  const source = publicationSourceFixture(runId, validationInputs);
   const started = "2026-09-13T14:00:00.000Z";
   const observations = createPublicationObservations(source, {
     sourceDigest: source.digest,
@@ -141,8 +154,25 @@ function registryEvidence(
   };
 }
 
-function registryBudgetFixture(warningCount = 0, validationInputs: Record<string, string> = {}) {
-  const { record, source } = registryEvidence("123", warningCount, validationInputs);
+function registryBudgetFixture(
+  warningCount = 0,
+  validationInputs: Record<string, string> = {},
+  validationPurpose: "publish" | "diagnostic" = "publish",
+) {
+  const evidence =
+    validationPurpose === "publish"
+      ? registryEvidence("123", warningCount, validationInputs)
+      : {
+          source: publicationSourceFixture("123", validationInputs, validationPurpose),
+          admission: null,
+        };
+  const source = evidence.source;
+  const record = {
+    sourceAdmissionContract: "1",
+    sourceAdmission: source,
+    publicationAdmissionContract: "1",
+    publicationAdmission: evidence.admission,
+  };
   const releaseProfile = source.coverage.release_profile;
   const runReleaseSoak = source.coverage.run_release_soak;
   const candidateRequest = buildFullReleaseCandidateRequest({
@@ -213,10 +243,13 @@ describe("retained publication admission", () => {
         skip_package_telegram_e2e: "true",
         allow_unreleased_changelog: "true",
       };
-      const { plan, context } = registryBudgetFixture(0, {
-        ...telegram,
-        release_profile: releaseProfile,
-      });
+      // This proves workflow field transport; publish/all also requires qualified
+      // npm artifacts and registry sealing, covered by their boundary suites.
+      const { plan, context } = registryBudgetFixture(
+        0,
+        { ...telegram, release_profile: releaseProfile },
+        "diagnostic",
+      );
       expect(plan.evidenceReuse.requested).toBe(false);
       const workflow = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
       const writer = workflow.jobs.summary.steps.find(
@@ -297,6 +330,8 @@ describe("retained publication admission", () => {
         allowUnreleasedChangelog: "true",
       });
       expect(manifest.publicationAdmission).toEqual(plan.publicationAdmission);
+      expect(manifest.validationInputs.validationPurpose).toBe("diagnostic");
+      expect(manifest).not.toHaveProperty("publishInputs");
     },
   );
 
@@ -608,7 +643,12 @@ describe("retained publication admission", () => {
   );
 
   it("retains distinct root publication history in the actual reused manifest writer and budget", () => {
-    const { plan, context } = registryBudgetFixture();
+    const { plan, context, source } = registryBudgetFixture();
+    const fresh = buildReleaseValidationManifest({ plan, context });
+    expect(fresh.publicationAdmission).toEqual(plan.publicationAdmission);
+    expect(fresh.validationInputs).toMatchObject({
+      publicationSelectionJson: publicationIntentInputs(source).publicationSelectionJson,
+    });
     const root = registryEvidence("99");
     root.observations.prerequisitesCompletedAt = "2026-09-13T13:00:00.000Z";
     root.observations.collectionStartedAt = "2026-09-13T13:00:00.000Z";
@@ -1159,14 +1199,8 @@ describe("full release artifact contract", () => {
           rerun_group: "all",
           provider: "openai",
           trusted_workflow_json: publicationDispatchEnvelope(null, {
-            validationPurpose: "publish",
-            publicationSelection: {
-              route: "normal",
-              npmDistTag: "latest",
-              publishOpenclawNpm: true,
-              pluginPublishScope: "all-publishable",
-              plugins: [],
-            },
+            validationPurpose: "diagnostic",
+            publicationSelection: null,
           }),
         }),
         PUBLICATION_TOOLING_JSON: JSON.stringify({
@@ -1181,21 +1215,15 @@ describe("full release artifact contract", () => {
         GITHUB_RUN_ID: "124",
         GITHUB_RUN_ATTEMPT: "1",
       });
-      const inventory = { packages: [], platforms: [] };
-      const projection = {
-        version: "2026.9.9",
-        packages: [{ name: "openclaw", version: "2026.9.9", targets: ["npm"] }],
-        platforms: [],
-      };
-      const sourceAdmission = createPublicationSourceFact(request, inventory, projection);
+      const sourceAdmission = createPublicationSourceFact(request, null, null);
       const oldSource = createPublicationSourceFact(
         {
           ...request,
           runId: "98",
           candidateSha: "c".repeat(40),
         },
-        inventory,
-        projection,
+        null,
+        null,
       );
       const trustedWorkflow = { fullRef: "refs/heads/main", ref: "main", sha: "d".repeat(40) };
       const sourceManifest = {
@@ -1285,9 +1313,8 @@ describe("full release artifact contract", () => {
         ).toEqual(sourceAdmission);
         expect(manifest.sourceAdmission).not.toEqual(oldSource);
         expect(sourceManifest.sourceAdmission).toEqual(oldSource);
-        expect(manifest.validationInputs.publicationSelectionJson).toBe(
-          publicationIntentInputs(sourceAdmission).publicationSelectionJson,
-        );
+        expect(manifest.validationInputs).toMatchObject(publicationIntentInputs(sourceAdmission));
+        expect(manifest).not.toHaveProperty("publishInputs");
       } else {
         expect(manifest).not.toHaveProperty("sourceAdmission");
       }
