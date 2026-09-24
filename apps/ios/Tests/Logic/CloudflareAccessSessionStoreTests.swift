@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 
 @MainActor
@@ -161,7 +162,8 @@ struct CloudflareAccessSessionStoreTests {
         let session = try CloudflareAccessTestTokens().session()
         let store = CloudflareAccessSessionStore(
             persistence: memory.persistence,
-            authenticate: { _, _ in try await gate.login() }, retireTransports: { _ in })
+            authenticate: { _, _ in try await gate.login() },
+            retireTransports: { _ in })
         let attempt = store.signIn(application: application, openBrowser: { _ in })
         await gate.waitUntilStarted()
         store.cancelSignIn(for: application.origin)
@@ -196,7 +198,8 @@ struct CloudflareAccessSessionStoreTests {
         memory.values[session.origin] = try String(data: JSONEncoder().encode(session), encoding: .utf8)
         let store = CloudflareAccessSessionStore(
             persistence: memory.persistence,
-            authenticate: { _, _ in throw CloudflareAccessError.loginFailed }, retireTransports: { _ in })
+            authenticate: { _, _ in throw CloudflareAccessError.loginFailed },
+            retireTransports: { _ in })
         #expect(store.snapshot(for: session.origin)?.session.subject == session.subject)
         let other = try CloudflareAccessOrigin(#require(URL(string: "https://gateway.example.test")))
         #expect(store.snapshot(for: other) == nil)
@@ -238,5 +241,119 @@ struct CloudflareAccessSessionStoreTests {
         #expect(!memory.events.contains("save"))
         #expect(store.state(for: application.origin) == .reauthenticationRequired)
         #expect(store.snapshot(for: application.origin) == nil)
+    }
+
+    @Test func `default Keychain restores new owners and awaits isolated deletion`() async throws {
+        let seed = try CloudflareAccessTestTokens().session()
+        guard let token = seed.authorizationHeader(for: seed.origin.url) else {
+            throw CloudflareAccessError.invalidSession
+        }
+        let identifier = UUID().uuidString.lowercased()
+        let firstOrigin = try CloudflareAccessOrigin(#require(URL(string: "https://first-\(identifier).example.test")))
+        let secondOrigin =
+            try CloudflareAccessOrigin(#require(URL(string: "https://second-\(identifier).example.test")))
+        let firstApplication = try CloudflareAccessApplication(
+            origin: firstOrigin, issuer: seed.issuer, audience: seed.audience)
+        let secondApplication = try CloudflareAccessApplication(
+            origin: secondOrigin, issuer: seed.issuer, audience: seed.audience)
+        let firstSession = CloudflareAccessSession(
+            application: firstApplication, subject: seed.subject, token: token, expiresAt: seed.expiresAt)
+        let secondSession = CloudflareAccessSession(
+            application: secondApplication, subject: seed.subject, token: token, expiresAt: seed.expiresAt)
+        let service = "\(Bundle.main.bundleIdentifier ?? "ai.openclaw.ios").cloudflare-access"
+        let controlService = "openclaw.tests.cloudflare-access.\(identifier)"
+        let firstAccount = firstOrigin.url.absoluteString
+        let secondAccount = secondOrigin.url.absoluteString
+        let ownedRows = [(service, firstAccount), (service, secondAccount), (controlService, firstAccount)]
+        for (rowService, account) in ownedRows {
+            let absent = GenericPasswordKeychainStore.loadString(service: rowService, account: account) == nil
+            try #require(absent)
+        }
+        defer {
+            // Only these unique rows belong to this test. No service-wide cleanup.
+            for (rowService, account) in ownedRows {
+                #expect(GenericPasswordKeychainStore.delete(service: rowService, account: account))
+                let absent = GenericPasswordKeychainStore.loadString(service: rowService, account: account) == nil
+                #expect(absent)
+            }
+        }
+        try GenericPasswordKeychainStore.saveStringResult(
+            "sentinel", service: controlService, account: firstAccount).get()
+        let writer = CloudflareAccessSessionStore(
+            authenticate: { application, _ in
+                switch application {
+                case firstApplication: firstSession
+                case secondApplication: secondSession
+                default: throw CloudflareAccessError.loginFailed
+                }
+            },
+            retireTransports: { _ in })
+        _ = try await writer.signIn(application: firstApplication, openBrowser: { _ in }).value
+        _ = try await writer.signIn(application: secondApplication, openBrowser: { _ in }).value
+        let firstSaved = GenericPasswordKeychainStore.loadString(service: service, account: firstAccount) != nil
+        let secondSaved = GenericPasswordKeychainStore.loadString(service: service, account: secondAccount) != nil
+        #expect(firstSaved)
+        #expect(secondSaved)
+
+        let retirement = LoginGate()
+        let reader = CloudflareAccessSessionStore(
+            authenticate: { _, _ in throw CloudflareAccessError.loginFailed },
+            retireTransports: { origin in
+                #expect(origin == firstOrigin)
+                _ = try? await retirement.login()
+            })
+        let firstRestored = reader.snapshot(for: firstOrigin)
+        let secondRestored = reader.snapshot(for: secondOrigin)
+        let firstMatches = firstRestored?.session.origin == firstOrigin &&
+            firstRestored?.session.subject == seed.subject &&
+            firstRestored?.session.authorizationHeader(for: firstOrigin.url) == token
+        let secondMatches = secondRestored?.session.origin == secondOrigin &&
+            secondRestored?.session.subject == seed.subject &&
+            secondRestored?.session.authorizationHeader(for: secondOrigin.url) == token
+        #expect(firstMatches)
+        #expect(secondMatches)
+
+        var forgetReturned = false
+        let forget = Task { @MainActor in
+            try await reader.forget(firstOrigin)
+            forgetReturned = true
+        }
+        do {
+            await retirement.waitUntilStarted()
+            #expect(!forgetReturned)
+            let firstStillStored = GenericPasswordKeychainStore
+                .loadString(service: service, account: firstAccount) != nil
+            let secondStillStored = GenericPasswordKeychainStore
+                .loadString(service: service, account: secondAccount) != nil
+            let controlStillStored = GenericPasswordKeychainStore.loadString(
+                service: controlService, account: firstAccount) == "sentinel"
+            #expect(firstStillStored)
+            #expect(secondStillStored)
+            #expect(controlStillStored)
+            retirement.complete(seed)
+            try await forget.value
+        } catch {
+            // Join the owned retirement before deferred native-row cleanup, even on failure.
+            retirement.complete(seed)
+            forget.cancel()
+            _ = await forget.result
+            throw error
+        }
+        #expect(forgetReturned)
+        #expect(reader.state(for: firstOrigin) == .signedOut)
+        let firstDeleted = GenericPasswordKeychainStore.loadString(service: service, account: firstAccount) == nil
+        #expect(firstDeleted)
+        let restarted = CloudflareAccessSessionStore(
+            authenticate: { _, _ in throw CloudflareAccessError.loginFailed }, retireTransports: { _ in })
+        let firstRemainsAbsent = restarted.snapshot(for: firstOrigin) == nil
+        let surviving = restarted.snapshot(for: secondOrigin)
+        let secondSurvives = surviving?.session.origin == secondOrigin &&
+            surviving?.session.subject == seed.subject &&
+            surviving?.session.authorizationHeader(for: secondOrigin.url) == token
+        let controlSurvives = GenericPasswordKeychainStore.loadString(
+            service: controlService, account: firstAccount) == "sentinel"
+        #expect(firstRemainsAbsent)
+        #expect(secondSurvives)
+        #expect(controlSurvives)
     }
 }
