@@ -26,10 +26,16 @@ import {
 } from "./net.js";
 
 const flyMachineEnvKeys = ["FLY_MACHINE_ID", "FLY_APP_NAME"] as const;
+const cloudflareContainerEnvKeys = [
+  "CLOUDFLARE_APPLICATION_ID",
+  "CLOUDFLARE_DURABLE_OBJECT_ID",
+  "OPENCLAW_CONTAINER",
+] as const;
+const containerProbeEnvKeys = [...flyMachineEnvKeys, ...cloudflareContainerEnvKeys] as const;
 
 function clearFlyMachineEnvForTest(): () => void {
-  const envSnapshot = captureEnv([...flyMachineEnvKeys]);
-  for (const key of flyMachineEnvKeys) {
+  const envSnapshot = captureEnv([...containerProbeEnvKeys]);
+  for (const key of containerProbeEnvKeys) {
     deleteTestEnvValue(key);
   }
 
@@ -709,6 +715,47 @@ describe("isContainerEnvironment", () => {
       "0::/system.slice/cri-containerd-a1b2c3d4e5f6.scope\n",
     );
     expect(isContainerEnvironment()).toBe(true);
+  });
+
+  it("returns true on Cloudflare Containers via documented runtime env vars", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue("10:cpuset:\n9:perf_event:\n8:memory:\n0::/\n");
+
+    setTestEnvValue("CLOUDFLARE_APPLICATION_ID", "app-123");
+    expect(isContainerEnvironment()).toBe(true);
+  });
+
+  it("returns true when CLOUDFLARE_DURABLE_OBJECT_ID is set without APPLICATION_ID", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue("0::/\n");
+
+    setTestEnvValue("CLOUDFLARE_DURABLE_OBJECT_ID", "do-456");
+    expect(isContainerEnvironment()).toBe(true);
+  });
+
+  it("honors OPENCLAW_CONTAINER=1 override without platform signals", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue("0::/user.slice\n");
+
+    setTestEnvValue("OPENCLAW_CONTAINER", "1");
+    expect(isContainerEnvironment()).toBe(true);
+  });
+
+  it("honors OPENCLAW_CONTAINER=0 even when Cloudflare env vars are present", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // would otherwise be true
+    setTestEnvValue("CLOUDFLARE_APPLICATION_ID", "app-123");
+    setTestEnvValue("OPENCLAW_CONTAINER", "0");
+    expect(isContainerEnvironment()).toBe(false);
   });
 
   it("caches the result across calls", () => {

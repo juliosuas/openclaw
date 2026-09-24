@@ -72,7 +72,27 @@ function readBonjourDisableOverride(): boolean | null {
 }
 
 function isContainerEnvironment() {
+  // Keep aligned with src/infra/container-environment.ts (shared signals).
+  // Prefer OPENCLAW_CONTAINER override, then documented platform env vars,
+  // then sentinel files / cgroup markers. Cloudflare Containers auto-set
+  // CLOUDFLARE_APPLICATION_ID / CLOUDFLARE_DURABLE_OBJECT_ID:
+  // https://developers.cloudflare.com/containers/configuration/environment-variables/
+  const override = process.env.OPENCLAW_CONTAINER?.trim();
+  if (override) {
+    if (/^(0|false|no|off)$/i.test(override)) {
+      return false;
+    }
+    return isTruthyEnvValue(override);
+  }
+
   if (process.env.FLY_MACHINE_ID?.trim() && process.env.FLY_APP_NAME?.trim()) {
+    return true;
+  }
+
+  if (
+    process.env.CLOUDFLARE_APPLICATION_ID?.trim() ||
+    process.env.CLOUDFLARE_DURABLE_OBJECT_ID?.trim()
+  ) {
     return true;
   }
 

@@ -245,6 +245,21 @@ describe("gateway bonjour advertiser", () => {
     await expect(started.stop()).resolves.toBeUndefined();
   });
 
+  it("auto-disables Bonjour on Cloudflare Containers via documented runtime env vars", async () => {
+    enableAdvertiserUnitMode();
+    vi.stubEnv("CLOUDFLARE_APPLICATION_ID", "app-123");
+    vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    vi.spyOn(fs, "readFileSync").mockReturnValue("10:cpuset:\n9:perf_event:\n8:memory:\n0::/\n");
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(createService).not.toHaveBeenCalled();
+    await expect(started.stop()).resolves.toBeUndefined();
+  });
+
   it("auto-disables Bonjour on Fly Machines without Docker sentinel files", async () => {
     enableAdvertiserUnitMode();
     vi.stubEnv("FLY_MACHINE_ID", "3d8d5459a03038");
