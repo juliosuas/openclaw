@@ -60,9 +60,12 @@ Proof: `src/channels/message/ingress-drain.test.ts`,
   400 falls back to a legacy reply. New recoveries go into the shared
   predicates (`send-error-predicates.ts`, `reply-parameters.ts`), never into
   one funnel only.
-- Outbound flood waits honor `retry_after` up to
-  `TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS`; do not re-clamp Telegram sends to the
-  generic channel retry ceiling.
+- Outbound flood waits have one owner: the per-token account limiter in
+  `account-throttler.ts`. A 429 pauses every call for that bot token until
+  `retry_after` (bounded exponential backoff with jitter when it is missing).
+  Final replies wait and retry within `TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS`;
+  stream previews and typing run as replaceable requests and are skipped, not
+  queued. Send retry runners must not retry 429 themselves.
 - Webhook security ordering. The secret header is validated first
   (constant-time compare, single-header enforcement, connection close on 401);
   the request rate limit budgets only failed-auth attempts so Telegram's own

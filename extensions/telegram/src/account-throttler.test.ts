@@ -2,7 +2,7 @@
 import { createRequire } from "node:module";
 import { Api } from "grammy";
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
-import { getOrCreateAccountThrottler } from "./account-throttler.js";
+import { getOrCreateAccountThrottler, runReplaceableTelegramRequest } from "./account-throttler.js";
 import { asTelegramClientFetch } from "./client-fetch.js";
 import { resetTelegramAccountThrottlersForTest } from "./runtime.test-support.js";
 
@@ -349,6 +349,112 @@ describe("getOrCreateAccountThrottler", () => {
     } finally {
       await vi.advanceTimersByTimeAsync(10_000);
       await Promise.all([results, next]);
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds every chat on the token for a flood wait and skips previews until it clears", async () => {
+    vi.useFakeTimers();
+    const startedAt = Date.now();
+    const sent: Array<{ chatId: number; text: string; at: number }> = [];
+    const api = new Api("123:flood-gate", {
+      buildUrl: (root, _token, method) => `${root}/${method}`,
+      fetch: asTelegramClientFetch(async (_input: unknown, init?: { body?: unknown }) => {
+        const body = JSON.parse(String(init?.body)) as { chat_id: number; text: string };
+        sent.push({ chatId: body.chat_id, text: body.text, at: Date.now() - startedAt });
+        return new Response(
+          JSON.stringify(
+            sent.length === 1
+              ? {
+                  ok: false,
+                  error_code: 429,
+                  description: "Too Many Requests: retry after 7",
+                  parameters: { retry_after: 7 },
+                }
+              : {
+                  ok: true,
+                  result: {
+                    message_id: sent.length,
+                    date: 0,
+                    chat: { id: body.chat_id, type: "supergroup", title: "Topics" },
+                    text: body.text,
+                  },
+                },
+          ),
+        );
+      }),
+    });
+    api.config.use(getOrCreateAccountThrottler("flood-gate").transformer);
+    const final = api.sendMessage(-100111, "final answer", { message_thread_id: 5 });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(sent.map(({ text }) => text)).toEqual(["final answer"]);
+
+    const otherChat = api.sendMessage(-100222, "other chat reply");
+    const preview = runReplaceableTelegramRequest(() =>
+      api.editMessageText(-100222, 9, "preview while flooded"),
+    );
+    await expect(preview).rejects.toMatchObject({ error_code: 429 });
+    try {
+      await vi.advanceTimersByTimeAsync(6_800);
+      expect(sent).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(final).resolves.toMatchObject({ text: "final answer" });
+      await expect(otherChat).resolves.toMatchObject({ text: "other chat reply" });
+      expect(sent.map(({ text }) => text)).toEqual([
+        "final answer",
+        "final answer",
+        "other chat reply",
+      ]);
+      expect(sent.slice(1).every(({ at }) => at >= 7_000)).toBe(true);
+    } finally {
+      await vi.advanceTimersByTimeAsync(60_000);
+      await Promise.allSettled([final, otherChat]);
+      vi.useRealTimers();
+    }
+  });
+
+  it("backs off without retry_after and yields previews to a pending group reply", async () => {
+    vi.useFakeTimers();
+    const sent: string[] = [];
+    const api = new Api("123:flood-backoff", {
+      buildUrl: (root, _token, method) => `${root}/${method}`,
+      fetch: asTelegramClientFetch(async (_input: unknown, init?: { body?: unknown }) => {
+        const body = JSON.parse(String(init?.body)) as { chat_id: number; text: string };
+        sent.push(body.text);
+        return new Response(
+          JSON.stringify(
+            sent.length <= 2
+              ? { ok: false, error_code: 429, description: "Too Many Requests" }
+              : {
+                  ok: true,
+                  result: {
+                    message_id: sent.length,
+                    date: 0,
+                    chat: { id: body.chat_id, type: "supergroup", title: "Topics" },
+                    text: body.text,
+                  },
+                },
+          ),
+        );
+      }),
+    });
+    api.config.use(getOrCreateAccountThrottler("flood-backoff").transformer);
+    const final = api.sendMessage(-100333, "final answer", { message_thread_id: 1 });
+    try {
+      await vi.advanceTimersByTimeAsync(100);
+      expect(sent).toEqual(["final answer"]);
+      // The reply is waiting out its backoff; the preview neither sends nor queues.
+      await expect(
+        runReplaceableTelegramRequest(() =>
+          api.editMessageText(-100333, 4, "preview", { message_thread_id: 2 } as never),
+        ),
+      ).rejects.toMatchObject({ error_code: 429 });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(final).resolves.toMatchObject({ text: "final answer" });
+      expect(sent).toEqual(["final answer", "final answer", "final answer"]);
+    } finally {
+      await vi.advanceTimersByTimeAsync(60_000);
+      await Promise.allSettled([final]);
       vi.useRealTimers();
     }
   });

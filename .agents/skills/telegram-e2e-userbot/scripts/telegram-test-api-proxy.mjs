@@ -166,22 +166,35 @@ export async function startTelegramTestApiProxy({
           rejection.skip -= 1;
         } else if (matches) {
           assertLeaseHealthy();
-          requestRejection = undefined;
+          rejection.times -= 1;
+          if (rejection.times <= 0) requestRejection = undefined;
+          const flood = rejection.retryAfter !== undefined;
+          const errorCode = flood ? 429 : 400;
           rejectionEvents.push({
             method,
             ordinal,
             rejectedAt: Date.now(),
             upstreamForwarded: false,
-            errorCode: 400,
+            errorCode,
+            ...(flood ? { retryAfter: rejection.retryAfter } : {}),
           });
           request.resume();
-          response.writeHead(400, { "content-type": "application/json" });
+          response.writeHead(errorCode, { "content-type": "application/json" });
           response.end(
-            JSON.stringify({
-              ok: false,
-              error_code: 400,
-              description: "Bad Request: synthetic Telegram E2E rejection",
-            }),
+            JSON.stringify(
+              flood
+                ? {
+                    ok: false,
+                    error_code: 429,
+                    description: `Too Many Requests: retry after ${rejection.retryAfter}`,
+                    parameters: { retry_after: rejection.retryAfter },
+                  }
+                : {
+                    ok: false,
+                    error_code: 400,
+                    description: "Bad Request: synthetic Telegram E2E rejection",
+                  },
+            ),
           );
           return;
         }
@@ -271,10 +284,10 @@ export async function startTelegramTestApiProxy({
   return {
     apiRoot,
     drainUpdates: (token) => drainTelegramTestUpdates(apiRoot, token),
-    rejectNextRequest({ method, skip = 0, bodyIncludes }) {
+    rejectNextRequest({ method, skip = 0, bodyIncludes, times = 1, retryAfter }) {
       assertLeaseHealthy();
       if (requestRejection) throw new Error("A Telegram API request rejection is active.");
-      requestRejection = { method, skip, bodyIncludes };
+      requestRejection = { method, skip, bodyIncludes, times, retryAfter };
     },
     holdNextResponse({ method, skip = 0 }) {
       assertLeaseHealthy();

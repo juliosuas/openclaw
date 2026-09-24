@@ -64,15 +64,22 @@ describe("Telegram operation leases through real clients", () => {
     },
   );
 
-  it("holds the transport across Telegram's full flood-wait rather than the generic retry cap", async () => {
+  it("holds the transport across Telegram's full flood-wait", async () => {
     const scheduled = createDeferred<number>();
     const release = createDeferred<void>();
     const timer = global.setTimeout;
+    const realNow = Date.now.bind(Date);
+    let skippedMs = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + skippedMs);
     vi.spyOn(global, "setTimeout").mockImplementation((callback, delay, ...args) => {
-      if (delay === 45_000 || delay === 30_000) {
+      // The account limiter sleeps until Telegram's retry_after deadline.
+      if (delay !== undefined && delay > 44_000 && delay <= 45_000) {
         scheduled.resolve(delay);
         return timer(() => {
-          void release.promise.then(() => callback(...args));
+          void release.promise.then(() => {
+            skippedMs += delay;
+            callback(...args);
+          });
         }, 0);
       }
       return timer(callback, delay, ...args);
@@ -87,7 +94,7 @@ describe("Telegram operation leases through real clients", () => {
       retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 30_000, jitter: 0 },
     });
     try {
-      expect(await scheduled.promise).toBe(45_000);
+      expect(await scheduled.promise).toBeGreaterThan(44_000);
       expect(fixture.requests).toHaveLength(1);
       resetTelegramClientOptionsCacheForTests();
       release.resolve();

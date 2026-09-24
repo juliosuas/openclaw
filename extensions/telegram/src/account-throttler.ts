@@ -1,12 +1,137 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { ApiError } from "grammy/types";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
-import { logVerbose, sleepWithAbort, waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
+import {
+  computeBackoff,
+  createSubsystemLogger,
+  logVerbose,
+  sleepWithAbort,
+  waitForAbortSignal,
+  type BackoffPolicy,
+} from "openclaw/plugin-sdk/runtime-env";
 import { apiThrottler } from "./bot.runtime.js";
 import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 
 type ApiThrottlerTransformer = ReturnType<typeof apiThrottler>;
+type TelegramApiCall = Parameters<ApiThrottlerTransformer>[0];
+type TelegramApiSignal = Parameters<ApiThrottlerTransformer>[3];
+
+// Telegram's 429 retry_after is a bot-token penalty. This limiter is its only
+// owner: every call for the token waits for the deadline, non-replaceable calls
+// (final replies, deletes, reactions) retry within this budget, and replaceable
+// calls (stream previews, typing) yield instead of queueing behind the penalty.
+export const TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS = 5 * 60_000;
+const FLOOD_BACKOFF_POLICY: BackoffPolicy = {
+  initialMs: 1_000,
+  maxMs: 30_000,
+  factor: 2,
+  jitter: 0.2,
+};
+const floodLog = createSubsystemLogger("telegram/flood");
+const replaceableRequests = new AsyncLocalStorage<true>();
+
+/** Runs Telegram calls whose content the next update supersedes, such as stream previews. */
+export function runReplaceableTelegramRequest<T>(run: () => Promise<T>): Promise<T> {
+  return replaceableRequests.run(true, run);
+}
+
+function skippedFloodResponse(waitMs: number, reason: string): ApiError {
+  const retryAfter = Math.max(1, Math.ceil(waitMs / 1000));
+  return {
+    ok: false,
+    error_code: 429,
+    description: `Too Many Requests: retry after ${retryAfter} (${reason}; request not sent)`,
+    parameters: { retry_after: retryAfter },
+  };
+}
+
+class TelegramFloodGate {
+  #untilMs = 0;
+  #strikes = 0;
+
+  remainingMs(): number {
+    return Math.max(0, this.#untilMs - Date.now());
+  }
+
+  close(retryAfterSeconds: number | undefined): number {
+    this.#strikes += 1;
+    const waitMs =
+      retryAfterSeconds !== undefined && retryAfterSeconds > 0
+        ? retryAfterSeconds * 1000
+        : computeBackoff(FLOOD_BACKOFF_POLICY, this.#strikes);
+    this.#untilMs = Math.max(this.#untilMs, Date.now() + waitMs);
+    return this.remainingMs();
+  }
+
+  open(): void {
+    this.#strikes = 0;
+  }
+}
+
+async function sleepForFloodGate(waitMs: number, signal: TelegramApiSignal): Promise<void> {
+  // grammY may supply the legacy node-fetch signal; bridge only its abort event.
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (signal?.aborted) {
+    abort();
+  } else {
+    signal?.addEventListener("abort", abort, { once: true });
+  }
+  try {
+    await sleepWithAbort(waitMs, controller.signal);
+  } finally {
+    signal?.removeEventListener("abort", abort);
+  }
+}
+
+function callThroughFloodGate(
+  gate: TelegramFloodGate,
+  replaceable: boolean,
+  prev: TelegramApiCall,
+): TelegramApiCall {
+  return async (method, payload, signal) => {
+    // The ingress worker owns getUpdates flood waits (and long polls must not stall here).
+    if (method === "getUpdates") {
+      return prev(method, payload, signal);
+    }
+    let waitedMs = 0;
+    let flooded: ApiError | undefined;
+    for (;;) {
+      const waitMs = gate.remainingMs();
+      if (waitMs > 0) {
+        if (replaceable) {
+          return flooded ?? skippedFloodResponse(waitMs, "flood wait active");
+        }
+        if (waitedMs + waitMs > TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS) {
+          return flooded ?? skippedFloodResponse(waitMs, "flood wait exceeds delivery budget");
+        }
+        await sleepForFloodGate(waitMs, signal);
+        waitedMs += waitMs;
+        continue;
+      }
+      const result = await prev(method, payload, signal);
+      if (result.ok) {
+        gate.open();
+        return result;
+      }
+      if (result.error_code !== 429) {
+        return result;
+      }
+      flooded = result;
+      const closedMs = gate.close(result.parameters?.retry_after);
+      floodLog.warn(
+        `Telegram flood control on ${method}: all calls for this bot wait ${Math.ceil(closedMs / 1000)}s` +
+          (replaceable ? "; replaceable update skipped" : ""),
+      );
+      if (replaceable) {
+        return result;
+      }
+    }
+  };
+}
 type TelegramAccountThrottler = {
   transformer: ApiThrottlerTransformer;
   chatActions: ReturnType<typeof createTelegramSendChatActionHandler>;
@@ -27,6 +152,7 @@ class GroupRequestScheduler {
   private readonly lanes = new Map<string, Array<QueuedApiRequest<unknown>>>();
   private laneOrder: string[] = [];
   private nextLaneIndex = 0;
+  private pendingPriority = 0;
   private running = false;
   private actionTail = Promise.resolve();
   private nextActionAtMs = 0;
@@ -71,10 +197,30 @@ class GroupRequestScheduler {
     });
   }
 
-  enqueue<T>(laneKey: string, run: () => Promise<T>): Promise<T> {
+  /** Holds priority for a reply until it settles, including its flood waits. */
+  async withPriority<T>(run: () => Promise<T>): Promise<T> {
+    this.pendingPriority += 1;
+    try {
+      return await run();
+    } finally {
+      this.pendingPriority -= 1;
+    }
+  }
+
+  enqueue<T>(
+    laneKey: string,
+    run: () => Promise<T>,
+    replaceable: { skip: () => T } | undefined,
+  ): Promise<T> {
+    // Replaceable updates never queue behind pending replies; the next update carries their content.
+    if (replaceable && this.pendingPriority > 0) {
+      return Promise.resolve(replaceable.skip());
+    }
     return new Promise<T>((resolve, reject) => {
       const request: QueuedApiRequest<unknown> = {
-        run,
+        run: replaceable
+          ? async () => (this.pendingPriority > 0 ? replaceable.skip() : await run())
+          : run,
         resolve: resolve as (value: unknown) => void,
         reject,
       };
@@ -184,35 +330,63 @@ function createTelegramAccountThrottler(
     minIntervalMs: TELEGRAM_CHAT_ACTION_INTERVAL_MS,
   });
   const schedulersByChat = new Map<string, GroupRequestScheduler>();
-
-  const transformer: ApiThrottlerTransformer = (prev, method, payload, signal) => {
-    const apiPayload = readPayload(payload);
-    const groupChatKey = apiPayload ? resolveGroupChatKey(apiPayload) : undefined;
-    if (!apiPayload || !groupChatKey) {
-      return baseThrottler(
-        (queuedMethod, queuedPayload, queuedSignal) =>
-          chatActions.apiTransformer(prev, queuedMethod, queuedPayload, queuedSignal),
-        method,
-        payload,
-        signal,
-      );
-    }
-
+  const floodGate = new TelegramFloodGate();
+  const getScheduler = (groupChatKey: string) => {
     let scheduler = schedulersByChat.get(groupChatKey);
     if (!scheduler) {
       scheduler = new GroupRequestScheduler();
       schedulersByChat.set(groupChatKey, scheduler);
     }
-    if (method === "sendChatAction") {
-      // Ephemeral actions must not spend message reservoirs; the shared guard honors flood waits.
-      return scheduler.enqueueAction(
-        () => chatActions.apiTransformer(prev, method, payload, signal),
-        signal,
-      );
-    }
+    return scheduler;
+  };
 
-    const laneKey = resolveForumLaneKey(apiPayload);
-    return scheduler.enqueue(laneKey, () => baseThrottler(prev, method, payload, signal));
+  const scheduleRequest: (replaceable: boolean) => ApiThrottlerTransformer =
+    (replaceable) => (prev, method, payload, signal) => {
+      const apiPayload = readPayload(payload);
+      const groupChatKey = apiPayload ? resolveGroupChatKey(apiPayload) : undefined;
+      if (!apiPayload || !groupChatKey) {
+        return baseThrottler(
+          (queuedMethod, queuedPayload, queuedSignal) =>
+            chatActions.apiTransformer(prev, queuedMethod, queuedPayload, queuedSignal),
+          method,
+          payload,
+          signal,
+        );
+      }
+
+      const scheduler = getScheduler(groupChatKey);
+      if (method === "sendChatAction") {
+        // Ephemeral actions must not spend message reservoirs; the shared guard honors flood waits.
+        return scheduler.enqueueAction(
+          () => chatActions.apiTransformer(prev, method, payload, signal),
+          signal,
+        );
+      }
+
+      const laneKey = resolveForumLaneKey(apiPayload);
+      return scheduler.enqueue(
+        laneKey,
+        () => baseThrottler(prev, method, payload, signal),
+        replaceable
+          ? { skip: () => skippedFloodResponse(1_000, "yielded to a pending reply") }
+          : undefined,
+      );
+    };
+
+  const transformer: ApiThrottlerTransformer = (prev, method, payload, signal) => {
+    // Classify at the call site: queued work later runs in the drain's async context.
+    const replaceable = method === "sendChatAction" || replaceableRequests.getStore() === true;
+    const send = callThroughFloodGate(
+      floodGate,
+      replaceable,
+      (queuedMethod, queuedPayload, queuedSignal) =>
+        scheduleRequest(replaceable)(prev, queuedMethod, queuedPayload, queuedSignal),
+    );
+    const apiPayload = readPayload(payload);
+    const groupChatKey = apiPayload ? resolveGroupChatKey(apiPayload) : undefined;
+    return replaceable || !groupChatKey
+      ? send(method, payload, signal)
+      : getScheduler(groupChatKey).withPriority(() => send(method, payload, signal));
   };
   return { transformer, chatActions };
 }

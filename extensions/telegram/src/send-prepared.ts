@@ -18,7 +18,6 @@ import {
   withTelegramNativeQuoteFallback,
   isTelegramQuoteParamError,
 } from "./reply-parameters.js";
-import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "./retry-after.js";
 import {
   removeTelegramRichNativeQuoteParam,
   toTelegramRichMessageContextParams,
@@ -46,7 +45,6 @@ export function createTelegramReplyRequest(runtime: RuntimeEnv): PreparedRequest
   const retry = createChannelApiRetryRunner({
     shouldRetry: shouldRetryTelegramSendError,
     strictShouldRetry: true,
-    retryAfterMaxDelayMs: TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS,
   });
   return (send, operation, options) =>
     withTelegramApiErrorLogging({
