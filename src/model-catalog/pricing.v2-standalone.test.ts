@@ -97,6 +97,8 @@ beforeEach(() => {
           "owner/extra": { input: 6, output: 12, source: "openCode" },
           "owner/free": { input: 0, output: 0, source: "openCode" },
           "gateway/vendor/own": { input: 3, output: 9, source: "modelsDev" },
+          // A mirror's standalone rate colliding with an unknown catalog row.
+          "vendor/catalogued": { input: 7, output: 7, source: "modelsDev" },
         },
       }),
       generated_at: 200,
@@ -155,7 +157,10 @@ it.each([
     ref: "vendor/listed",
     cost: rates(2, 4),
   },
-  { name: "unknown catalog row is not revived by upstream", ref: "vendor/catalogued" },
+  {
+    name: "unknown catalog row is not revived by upstream or a colliding standalone rate",
+    ref: "vendor/catalogued",
+  },
   { name: "owner reads its provider-owned rate", ref: "owner/extra", cost: rates(6, 12) },
   { name: "authoritative owner keeps a native free rate", ref: "owner/free", cost: rates(0, 0) },
 ])("$name", ({ ref, cost }) => {

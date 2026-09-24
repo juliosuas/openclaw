@@ -46,10 +46,17 @@ export function projectRemoteModelCatalog(bundle: RemoteModelCatalogWireBundle):
   const providers: Record<string, ModelCatalogProvider> = Object.fromEntries(
     Object.entries(bundle.providers).map(([id, provider]) => [id, { ...provider, models: [] }]),
   );
-  // Provider-owned standalone rates keep v1 semantics: zero needs authoritative owner policy.
+  // A model row owns its key whatever its status: a mirror's standalone rate for an
+  // unknown or withdrawn row must not price it. Provider-owned standalone rates keep v1
+  // semantics: zero needs authoritative owner policy.
+  const rowKeys = new Set(
+    bundle.models.map(({ provider, id }) => buildModelCatalogRef(provider, id)),
+  );
   const prices: Array<[string, RemoteModelCatalogPrice]> = Object.entries(
     bundle.providerPricing ?? {},
-  ).map(([key, { source: _source, ...cost }]) => [key, { cost, explicit: false }]);
+  )
+    .filter(([key]) => !rowKeys.has(key))
+    .map(([key, { source: _source, ...cost }]) => [key, { cost, explicit: false }]);
   for (const { provider, pricing, ...model } of bundle.models) {
     let cost: ModelCatalogCost | undefined;
     if (pricing.status === "known") {
