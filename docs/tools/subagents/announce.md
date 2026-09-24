@@ -89,8 +89,13 @@ final answer through the message tool and then returns `NO_REPLY`, that final
 answer remains authoritative.
 
 Completion delivery can read an existing registered archive when child cleanup
-finishes before the parent resumes. This does not add a post-cleanup retrieval
-feature.
+finishes before the parent resumes. The Control UI's **Tasks** inspector also
+reads the completed run's retained transcript after cleanup removes its live
+session. Paging stays bound to that run's archive, even if the session key is reused.
+Oversized text records use the normal history size notice. A single archived
+record above 8 MiB makes Tasks history unavailable before the reader decodes it,
+to bound per-record decoding memory. This read limit does not
+change the retained archive or completion delivery's final-answer scanner.
 
 Terminal failed runs report failure status without replaying captured
 reply text. Tool/toolResult output is not promoted into child result text.
