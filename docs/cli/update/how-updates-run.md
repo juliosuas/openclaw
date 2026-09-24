@@ -33,13 +33,15 @@ replacement. Choose an empty `OPENCLAW_GIT_DIR` and retry.
 
 If the resolved registry package version equals the installed version without changing
 the selected channel or installation method, or the Git target SHA equals
-`HEAD` without a recorded build from a different commit, plugin convergence still runs; if plugins and runtime artifacts remain unchanged, the run finishes `skipped` with reason `already-current`. Runtime maintenance can therefore succeed without changing the Git revision. A same-version
+`HEAD` and the recorded build commit matches it, plugin convergence still runs; if plugins and runtime artifacts remain unchanged, the run finishes `skipped` with reason `already-current`. Runtime maintenance can therefore succeed without changing the Git revision. A same-version
 explicit `--channel` or installation-method change finishes successfully.
 Changed plugins restart a running managed Gateway unless `--no-restart` is set; retained exact pins produce the same advisories as a core update without requiring a restart.
 
-If a Git checkout advanced without rebuilding, the matching source revision still
-needs an update. OpenClaw builds and validates a separate candidate, then stops
-the managed Gateway before replacing the stale runtime and restarting it.
+If a Git checkout advanced without rebuilding or its runtime has no recorded
+build commit, the matching source revision still needs an update. OpenClaw builds
+and validates a separate candidate, then stops the managed Gateway before
+replacing the runtime and restarting it. The new build records its commit, so
+the next update can finish as already current.
 `--no-restart` cannot replace runtime files used by a running Gateway in the same
 installation; the update leaves those files intact and reports the process and
 the stop/retry action.

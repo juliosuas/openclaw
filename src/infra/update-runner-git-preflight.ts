@@ -601,12 +601,11 @@ export async function runGitCandidatePreflight(params: {
     localDevBranchExists = upstream.localDevBranchExists;
   }
 
-  // Source-only runs have no build provenance. Recovery's restart-safety checks
-  // must not turn their source no-op into snapshotting or service activation.
+  // A matching source revision cannot prove an unrecorded runtime is current.
   const canSkipActivation =
     !params.prepareGitExposure &&
-    (params.beforeBuiltCommit === null ||
-      gitCommitPrefixesMatch(params.beforeBuiltCommit, params.beforeSha ?? ""));
+    params.beforeBuiltCommit !== null &&
+    gitCommitPrefixesMatch(params.beforeBuiltCommit, params.beforeSha ?? "");
   if (canSkipActivation && preflightBaseSha === params.beforeSha) {
     return { status: "skipped", reason: "already-current" };
   }
