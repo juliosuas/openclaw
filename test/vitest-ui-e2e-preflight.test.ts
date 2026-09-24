@@ -2,7 +2,11 @@ import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assertUiE2ePreflight } from "./vitest/vitest.ui-e2e-preflight.ts";
 
-vi.mock("node:http", { spy: true });
+vi.mock("node:http", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:http")>();
+  // Native HTTP constructors outlive this file in shared workers.
+  return { ...actual, createServer: vi.fn(actual.createServer) };
+});
 
 const listeners: Array<{
   server: ReturnType<typeof createServer>;
@@ -49,6 +53,7 @@ describe("UI E2E environment preflight", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(fetchImpl.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
     expectListenerClosed();
+    expect(vi.isMockFunction(process.getBuiltinModule("node:http").Server)).toBe(false);
   });
 
   it("reports proxy HTTP failures without exposing remote content", async () => {
