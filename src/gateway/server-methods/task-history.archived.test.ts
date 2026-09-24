@@ -674,6 +674,7 @@ describe("archived tasks.history", () => {
           {
             code: "UNAVAILABLE",
             retryable: false,
+            details: { code: "TASK_HISTORY_PREVIEW_CAPACITY" },
             message: expect.stringContaining("8 MiB preview limit"),
           },
         ]);

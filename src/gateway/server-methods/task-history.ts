@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import {
   ErrorCodes,
+  GatewayErrorDetailCodes,
   errorShape,
   validateTasksHistoryParams,
   TasksHistoryResultSchema,
@@ -325,7 +326,10 @@ export const taskHistoryHandler: GatewayRequestHandler = async (opts) => {
         errorShape(
           ErrorCodes.UNAVAILABLE,
           "This task contains a transcript record above the 8 MiB preview limit. Its retained history is unchanged, but this record cannot be previewed. Refreshing will not help.",
-          { retryable: false },
+          {
+            retryable: false,
+            details: { code: GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY },
+          },
         ),
       );
     } else {
