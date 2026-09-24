@@ -78,12 +78,8 @@ beforeEach(() => {
             alternatives: [{ input: 2.5, output: 5, source: "liteLLM" }],
           },
           "vendor/litellm-only": { input: 1, output: 3, source: "liteLLM" },
-          "vendor/catalogued": {
-            input: 5,
-            output: 10,
-            source: "openRouter",
-            passthroughOnly: true,
-          },
+          // A mirror's unflagged upstream rate for a vendor model with an unknown row.
+          "vendor/catalogued": { input: 5, output: 10, source: "openRouter" },
           // A reseller's promotional rate for a vendor model that has its own catalog row.
           "vendor/rowpriced": {
             input: 2,

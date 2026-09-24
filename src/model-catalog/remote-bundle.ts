@@ -46,9 +46,10 @@ export function projectRemoteModelCatalog(bundle: RemoteModelCatalogWireBundle):
   const providers: Record<string, ModelCatalogProvider> = Object.fromEntries(
     Object.entries(bundle.providers).map(([id, provider]) => [id, { ...provider, models: [] }]),
   );
-  // A model row owns its key whatever its status: a mirror's standalone rate for an
-  // unknown or withdrawn row must not price it. Provider-owned standalone rates keep v1
-  // semantics: zero needs authoritative owner policy.
+  // A model row owns its key whatever its status: a mirror's standalone or upstream rate
+  // must not price an unknown or withdrawn row directly. Upstream rates for row keys stay
+  // available to gateways passing the vendor's model through. Provider-owned standalone
+  // rates keep v1 semantics: zero needs authoritative owner policy.
   const rowKeys = new Set(
     bundle.models.map(({ provider, id }) => buildModelCatalogRef(provider, id)),
   );
@@ -89,7 +90,7 @@ export function projectRemoteModelCatalog(bundle: RemoteModelCatalogWireBundle):
                 cost: rates,
               })),
             ],
-            passthroughOnly,
+            passthroughOnly: passthroughOnly || rowKeys.has(key),
           },
         ],
       ),
