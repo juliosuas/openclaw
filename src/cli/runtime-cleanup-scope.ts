@@ -84,7 +84,11 @@ export function retainCliRegistryHarnesses(
       // Retain physical custody for terminal teardown, not ordinary invocation authority.
       const release = retain();
       if (release) {
-        current.pluginResources?.adopt({ release: async () => void (await release()) });
+        current.pluginResources?.adopt({
+          release: async () => {
+            await release();
+          },
+        });
       }
     }
     current.registries.add(registry);
