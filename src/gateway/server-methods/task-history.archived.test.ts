@@ -675,7 +675,7 @@ describe("archived tasks.history", () => {
             code: "UNAVAILABLE",
             retryable: false,
             details: { code: "TASK_HISTORY_PREVIEW_CAPACITY" },
-            message: expect.stringContaining("8 MiB preview limit"),
+            message: expect.stringContaining("retained transcript record exceeds the 8 MiB limit"),
           },
         ]);
         expect(capacityUnavailable.calls[0]?.[2]?.message).toContain("Refreshing will not help");
