@@ -24,13 +24,14 @@ import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
 import { canonicalizeNativeProgressCardInput } from "./plan-compaction-state.js";
-import { isJsonObject, type CodexTurnStartResponse } from "./protocol.js";
+import { isJsonObject } from "./protocol.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js";
 import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import type { CodexStartedTurn } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import {
   codexTranscriptMirrorRuntime,
@@ -46,7 +47,7 @@ export function activateCodexAttemptTurn(
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
   notifications: CodexAttemptNotificationController,
-  turn: CodexTurnStartResponse,
+  { turn, upstreamUserText }: CodexStartedTurn,
 ) {
   const {
     prompt,
@@ -63,7 +64,7 @@ export function activateCodexAttemptTurn(
     runAbortController,
     terminalState,
     abortExplicitly,
-    abortFromUpstream,
+    cancellation,
     sessionAgentId,
     contextSessionKey,
     effectiveCwd,
@@ -231,7 +232,7 @@ export function activateCodexAttemptTurn(
           }
         : {}),
       ...(prepareNativeMcpAppResultDetails ? { prepareNativeMcpAppResultDetails } : {}),
-      upstreamUserText: turnState.codexTurnPromptText,
+      upstreamUserText,
       onContextCompacted: async () => {
         computerContextEpoch.value += 1;
         delete computerContextEpoch.frameToolCallId;
@@ -272,9 +273,18 @@ export function activateCodexAttemptTurn(
             : "Codex cancellation could not confirm the turn stopped; background terminals may still be running.",
         );
       }
-      // Native terminal receipt leaves background terminals alive. Cancellation,
-      // budget expiry, and policy replacement close that thread's execution too.
-      await terminateCodexBackgroundTerminals(resourceState.client, resourceState.thread.threadId);
+      if (resources.nativeProcessAuthority) {
+        await resources.nativeProcessAuthority.cancelTurn(
+          resourceState.client,
+          resourceState.thread.threadId,
+          activeTurnId,
+        );
+      } else {
+        await terminateCodexBackgroundTerminals(
+          resourceState.client,
+          resourceState.thread.threadId,
+        );
+      }
       if (state.permissionChangeRestart) {
         state.permissionChangeRestart = "confirmed";
       }
@@ -601,13 +611,7 @@ export function activateCodexAttemptTurn(
     cancel: () => abortExplicitly("cancelled"),
     abort: () => abortExplicitly("aborted"),
   };
-  const freezeRunTerminalOutcome = () => {
-    if (terminalState.terminalOutcomeFrozen) {
-      return;
-    }
-    terminalState.terminalOutcomeFrozen = true;
-    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
-  };
+  const freezeRunTerminalOutcome = cancellation.freezeTerminalOutcome;
   // Return cleanup ownership before callbacks or backend publication can fail.
   const projectionReady = Promise.resolve().then(async () => {
     runAbortController.signal.addEventListener("abort", abortListener, { once: true });
@@ -680,7 +684,7 @@ export function activateCodexAttemptTurn(
           cwd: effectiveCwd,
           threadId: resourceState.thread.threadId,
           turnId: activeTurnId,
-          upstreamUserText: turnState.codexTurnPromptText,
+          upstreamUserText,
         }),
       );
     } catch (error) {

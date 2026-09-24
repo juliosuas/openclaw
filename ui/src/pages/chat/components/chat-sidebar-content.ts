@@ -22,6 +22,7 @@ import {
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import {
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
@@ -45,17 +46,34 @@ import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
-import type { AttachmentSidebarRuntime, SidebarContent } from "./chat-sidebar-content-types.ts";
+import type {
+  AttachmentSidebarRuntime,
+  SidebarContent,
+  ChatDetailPanelContent,
+} from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
 import { isTextAttachment } from "./chat-text-attachment.ts";
 import "./session-diff-panel.ts";
+
+registerFilePreviewEnglish();
 
 function renderSidebarAttachment(
   content: Extract<SidebarContent, { kind: "attachment" }>,
   onRequestUpdate: () => void,
   runtime: AttachmentSidebarRuntime,
   embedSandboxMode: EmbedSandboxMode,
+  download?: { pending: boolean; error: string | null; onDownload: () => void },
 ) {
+  if (content.download && download) {
+    return html`${renderCompactAttachmentCard({
+      kind: "document",
+      label: content.title,
+      mimeType: content.mimeType ?? undefined,
+      sizeBytes: content.sizeBytes,
+      onDownload: download.onDownload,
+      downloadPending: download.pending,
+    })}${download.error ? html`<div role="alert">${download.error}</div>` : nothing}`;
+  }
   const resolution = content.resolveSource?.(onRequestUpdate, runtime);
   const source = resolution ? (resolution.status === "ready" ? resolution : null) : content;
   const mimeType = content.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
@@ -198,7 +216,9 @@ function renderSidebarAttachment(
   });
 }
 
-export function buildRawContent(content: SidebarContent | null | undefined): SidebarContent | null {
+export function buildRawContent(
+  content: ChatDetailPanelContent | null | undefined,
+): ChatDetailPanelContent | null {
   if (!content) {
     return null;
   }
@@ -233,7 +253,7 @@ export function buildRawContent(content: SidebarContent | null | undefined): Sid
 // lines silently rewritten on save.
 
 function resolveSidebarCanvasSandbox(
-  content: SidebarContent,
+  content: ChatDetailPanelContent,
   embedSandboxMode: EmbedSandboxMode,
 ): string {
   return content.kind === "canvas"
@@ -242,7 +262,7 @@ function resolveSidebarCanvasSandbox(
 }
 
 type MarkdownSidebarProps = {
-  content: SidebarContent | null;
+  content: ChatDetailPanelContent | null;
   showingRawText: boolean;
   error: Error | null;
   onRetry: () => void;
@@ -258,6 +278,7 @@ type MarkdownSidebarProps = {
   embedded?: boolean;
   onAttachmentUpdate: () => void;
   attachmentRuntime: AttachmentSidebarRuntime;
+  attachmentDownload?: { pending: boolean; error: string | null; onDownload: () => void };
 };
 
 function renderMarkdownSidebar(props: MarkdownSidebarProps) {
@@ -438,6 +459,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                               props.onAttachmentUpdate,
                               props.attachmentRuntime,
                               props.embedSandboxMode ?? "scripts",
+                              props.attachmentDownload,
                             )}
                           </div>`
                         : html`

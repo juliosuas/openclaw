@@ -1,12 +1,11 @@
 /**
  * Playwright role snapshot helpers.
  *
- * Converts ARIA or AI snapshots into compact role/name text with stable refs
- * and duplicate disambiguation for agent actions.
+ * Preserves native AI refs and finalizes browser snapshot budgets and deltas.
  */
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
+import { INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
 type RoleRef = {
   role: string;
@@ -247,28 +246,6 @@ function decodeSnapshotName(nameToken: string | undefined): string | undefined {
   return nameToken?.startsWith('"') ? JSON.parse(nameToken) : nameToken;
 }
 
-function createRoleNameTracker() {
-  const groups = new Map<string, { count: number; first: RoleRef }>();
-  return (role: string, name?: string): RoleRef => {
-    const key = `${role}:${name ?? ""}`;
-    const group = groups.get(key);
-    const data: RoleRef = { role, name };
-    if (group) {
-      // The first generated ref gains index zero only when a duplicate appears.
-      if (group.count === 1) {
-        group.first.nth = 0;
-      }
-      data.nth = group.count;
-      group.count += 1;
-    } else {
-      groups.set(key, { count: 1, first: data });
-    }
-    return data;
-  };
-}
-
-type RoleNameTracker = ReturnType<typeof createRoleNameTracker>;
-
 function compactTree(lines: readonly string[]) {
   const entries: Array<{ line: string; keep: boolean; hasRef: boolean; indent: number }> = [];
   const stack: (typeof entries)[number][] = [];
@@ -317,103 +294,6 @@ function compactTree(lines: readonly string[]) {
   return compacted || "(empty)";
 }
 
-function processLine(
-  line: string,
-  refs: RoleRefMap,
-  options: RoleSnapshotOptions,
-  tracker: RoleNameTracker,
-  nextRef: () => string,
-): string | null {
-  const depth = getIndentLevel(line);
-  if (options.maxDepth !== undefined && depth > options.maxDepth) {
-    return null;
-  }
-
-  const parsed = parseSnapshotLine(line);
-  if (!parsed) {
-    return options.interactive ? null : line;
-  }
-  const { prefix, roleRaw, role, suffix } = parsed;
-  const name = decodeSnapshotName(parsed.nameToken);
-  const isInteractive = INTERACTIVE_ROLES.has(role);
-  const isContent = CONTENT_ROLES.has(role);
-  const isStructural = STRUCTURAL_ROLES.has(role);
-
-  if (options.interactive && !isInteractive) {
-    return null;
-  }
-  if (options.compact && isStructural && !name) {
-    return null;
-  }
-
-  const shouldHaveRef = isInteractive || (isContent && name);
-  if (!shouldHaveRef) {
-    return line;
-  }
-
-  const ref = nextRef();
-  const data = tracker(role, name);
-  refs[ref] = data;
-  const nth = data.nth ?? 0;
-
-  let enhanced = `${prefix}${roleRaw}`;
-  if (name) {
-    enhanced += ` ${JSON.stringify(name)}`;
-  }
-  enhanced += ` [ref=${ref}]`;
-  if (nth > 0) {
-    enhanced += ` [nth=${nth}]`;
-  }
-  if (suffix) {
-    enhanced += suffix;
-  }
-  return enhanced;
-}
-
-type InteractiveSnapshotLine = NonNullable<ReturnType<typeof parseSnapshotLine>> & {
-  name?: string;
-};
-
-function buildInteractiveSnapshotLines(params: {
-  lines: string[];
-  options: RoleSnapshotOptions;
-  refs: RoleRefMap;
-  resolveRef: (parsed: InteractiveSnapshotLine) => { ref: string; data: RoleRef } | null;
-  formatSuffix: (suffix: string, ref: string) => string;
-}): string[] {
-  const out: string[] = [];
-  for (const line of params.lines) {
-    if (params.options.maxDepth !== undefined && getIndentLevel(line) > params.options.maxDepth) {
-      continue;
-    }
-    const entry = parseSnapshotLine(line);
-    if (!entry) {
-      continue;
-    }
-    const parsed = { ...entry, name: decodeSnapshotName(entry.nameToken) };
-    if (!INTERACTIVE_ROLES.has(parsed.role)) {
-      continue;
-    }
-    const resolved = params.resolveRef(parsed);
-    if (!resolved?.ref) {
-      continue;
-    }
-    params.refs[resolved.ref] = resolved.data;
-
-    let enhanced = `- ${parsed.roleRaw}`;
-    if (parsed.name) {
-      enhanced += ` ${JSON.stringify(parsed.name)}`;
-    }
-    enhanced += ` [ref=${resolved.ref}]`;
-    if ((resolved.data.nth ?? 0) > 0) {
-      enhanced += ` [nth=${resolved.data.nth}]`;
-    }
-    enhanced += params.formatSuffix(parsed.suffix, resolved.ref);
-    out.push(enhanced);
-  }
-  return out;
-}
-
 /** Normalize a role snapshot ref accepted by browser actions. */
 export function parseRoleRef(raw: string): string | null {
   const trimmed = raw.trim();
@@ -434,50 +314,6 @@ export function parseRoleRef(raw: string): string | null {
   return null;
 }
 
-/** Build a role snapshot and refs from Playwright ARIA snapshot text. */
-export function buildRoleSnapshotFromAriaSnapshot(
-  ariaSnapshot: string,
-  options: RoleSnapshotOptions = {},
-): { snapshot: string; refs: RoleRefMap } {
-  const lines = ariaSnapshot.split("\n");
-  const refs: RoleRefMap = {};
-  const tracker = createRoleNameTracker();
-
-  let counter = 0;
-  const nextRef = () => {
-    counter += 1;
-    return `e${counter}`;
-  };
-
-  if (options.interactive) {
-    const result = buildInteractiveSnapshotLines({
-      lines,
-      options,
-      refs,
-      resolveRef: ({ role, name }) => ({ ref: nextRef(), data: tracker(role, name) }),
-      formatSuffix: (suffix) => (suffix.includes("[") ? suffix : ""),
-    });
-
-    return {
-      snapshot: result.join("\n") || "(no interactive elements)",
-      refs,
-    };
-  }
-
-  const result: string[] = [];
-  for (const line of lines) {
-    const processed = processLine(line, refs, options, tracker, nextRef);
-    if (processed !== null) {
-      result.push(processed);
-    }
-  }
-
-  return {
-    snapshot: options.compact ? compactTree(result) : result.join("\n") || "(empty)",
-    refs,
-  };
-}
-
 function parseAiSnapshotRef(ref: string | undefined): string | null {
   // Playwright's page-wide AI snapshots qualify element refs with a frame seq.
   return ref && /^(?:f\d+)?e\d+$|^\d{1,9}$/i.test(ref) ? ref : null;
@@ -495,25 +331,6 @@ export function buildRoleSnapshotFromAiSnapshot(
   const lines = aiSnapshot.split("\n");
   const refs: RoleRefMap = {};
 
-  if (options.interactive) {
-    const out = buildInteractiveSnapshotLines({
-      lines,
-      options,
-      refs,
-      resolveRef: (parsed) => {
-        const ref = parseAiSnapshotRef(parsed.ref);
-        return ref
-          ? { ref, data: { role: parsed.role, ...(parsed.name ? { name: parsed.name } : {}) } }
-          : null;
-      },
-      formatSuffix: (suffix, ref) => suffix.replace(` [ref=${ref}]`, ""),
-    });
-    return {
-      snapshot: out.join("\n") || "(no interactive elements)",
-      refs,
-    };
-  }
-
   const out: string[] | undefined = suppliedOptions === undefined ? undefined : [];
   for (const line of lines) {
     const depth = getIndentLevel(line);
@@ -523,11 +340,27 @@ export function buildRoleSnapshotFromAiSnapshot(
 
     const parsed = parseSnapshotLine(line);
     if (!parsed) {
-      out?.push(line);
+      if (!options.interactive) {
+        out?.push(line);
+      }
       continue;
     }
     const { role } = parsed;
     const name = decodeSnapshotName(parsed.nameToken);
+    if (options.interactive) {
+      const ref = parseAiSnapshotRef(parsed.ref);
+      if (INTERACTIVE_ROLES.has(role) && ref) {
+        refs[ref] = { role, ...(name ? { name } : {}) };
+        let enhanced = `- ${parsed.roleRaw}`;
+        if (name) {
+          enhanced += ` ${JSON.stringify(name)}`;
+        }
+        enhanced += ` [ref=${ref}]`;
+        enhanced += parsed.suffix.replace(` [ref=${ref}]`, "");
+        out?.push(enhanced);
+      }
+      continue;
+    }
     const isStructural = STRUCTURAL_ROLES.has(role);
 
     if (options.compact && isStructural && !name) {
@@ -543,9 +376,11 @@ export function buildRoleSnapshotFromAiSnapshot(
   }
 
   return {
-    snapshot: options.compact
-      ? compactTree(out ?? lines)
-      : (out ? out.join("\n") : aiSnapshot) || "(empty)",
+    snapshot: options.interactive
+      ? out!.join("\n") || "(no interactive elements)"
+      : options.compact
+        ? compactTree(out ?? lines)
+        : (out ? out.join("\n") : aiSnapshot) || "(empty)",
     refs,
   };
 }

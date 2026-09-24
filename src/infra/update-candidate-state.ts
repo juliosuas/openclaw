@@ -35,6 +35,11 @@ import {
   resolveUpdateCandidateStateIdentity,
   resolveUpdateCandidateStatePath,
 } from "./update-candidate-paths.js";
+import {
+  UpdateCandidatePluginCodeLinkReceiptSchema,
+  sealUpdateCandidatePluginCodeLinks,
+  type UpdateCandidatePluginCodeLink,
+} from "./update-candidate-plugin-code-links.js";
 import type { UpdateStateInspectionProgress } from "./update-candidate-state.diagnostics.js";
 import {
   parseUpdateStateInspectionWorker,
@@ -53,11 +58,12 @@ export type UpdateStateSchemaVersion = z.infer<typeof UpdateStateSchemaVersionsS
 export const UpdateCandidateStateSnapshotSchema = z.object({
   versions: UpdateStateSchemaVersionsSchema,
   pluginPaths: z.record(z.string(), z.string()),
+  pluginCodeLinks: UpdateCandidatePluginCodeLinkReceiptSchema.optional(),
 });
 type StateInput = { stateDir: string; config: OpenClawConfig; env?: NodeJS.ProcessEnv };
 type CandidateStateDatabase = Pick<
   DB,
-  "agent_databases" | "agent_database_leases" | "state_leases" | "migration_sources"
+  "agent_databases" | "agent_database_leases" | "state_leases"
 >;
 
 /** Older inspection workers report only the published version; agent stores never defer it. */
@@ -597,16 +603,14 @@ export async function snapshotUpdateCandidateState(
   const admittedDatabases = new Set(input.databaseInventory);
   const sourceRoot = path.resolve(input.stateDir);
   const shared = path.join(sourceRoot, "state", "openclaw.sqlite");
-  const { root } = await import("@openclaw/fs-safe");
-  const { detectLegacyExecApprovals, DOCTOR_CLAIM_SUFFIX, MAX_LEGACY_EXEC_APPROVALS_BYTES } =
-    await import("./state-migrations.exec-approvals.js");
-  const { resolveLegacyMigrationSourceKey } = await import("./state-migrations.receipts.js");
-  const { sourcePath: legacySourcePath } = detectLegacyExecApprovals({ stateDir: sourceRoot });
+  const { createUpdateCandidateExecApprovalsProjection } =
+    await import("./update-candidate-exec-approvals.js");
   const targetPath = (source: string) =>
     path.join(
       resolveUpdateCandidateStatePath(sourceRoot, input.targetStateDir, path.dirname(source)),
       path.basename(source),
     );
+  const execApprovals = createUpdateCandidateExecApprovalsProjection(sourceRoot, targetPath);
   // Physical copies dedupe on projection identity; the published versions
   // keep every raw alias so released rollback baselines still match.
   const files = await collectStateDatabasePaths(input);
@@ -636,28 +640,7 @@ export async function snapshotUpdateCandidateState(
                 transform: (db: DatabaseSync) => {
                   contentVersion = readStateSchemaContentVersion(db);
                   const queries = getNodeSqliteKysely<CandidateStateDatabase>(db);
-                  // Receipt identity includes the absolute legacy path. Preserve
-                  // its authority over the same copied bytes after projection.
-                  if (tableExists(db, "migration_sources")) {
-                    executeSqliteQuerySync(
-                      db,
-                      queries
-                        .updateTable("migration_sources")
-                        .set({
-                          source_key: resolveLegacyMigrationSourceKey(
-                            "exec-approvals-json",
-                            targetPath(legacySourcePath),
-                          ),
-                          source_path: targetPath(legacySourcePath),
-                        })
-                        .where(
-                          "source_key",
-                          "=",
-                          resolveLegacyMigrationSourceKey("exec-approvals-json", legacySourcePath),
-                        )
-                        .where("migration_kind", "=", "legacy-exec-approvals-json"),
-                    );
-                  }
+                  execApprovals.rebaseReceipt(db);
                   // Source process leases cannot own the independently opened rehearsal copy.
                   for (const table of ["agent_database_leases", "state_leases"] as const) {
                     if (tableExists(db, table)) {
@@ -716,33 +699,21 @@ export async function snapshotUpdateCandidateState(
       ...(contentVersion === undefined ? {} : { contentVersion }),
     });
   }
-  // Doctor must rehearse the same retired policy inputs as activation. Copy
-  // bytes, never links: the migration may claim or archive only private files.
-  for (const source of [legacySourcePath, `${legacySourcePath}${DOCTOR_CLAIM_SUFFIX}`]) {
-    // lstat keeps broken links visible to the same refusal as ordinary links.
-    const exists = await fs.lstat(source).then(
-      () => true,
-      (error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT")) {
-          return false;
-        }
-        throw error;
-      },
-    );
-    if (!exists) {
-      continue;
-    }
-    const sourceRootHandle = await root(sourceRoot);
-    const opened = await sourceRootHandle.read(path.relative(sourceRoot, source), {
-      hardlinks: "reject",
-      symlinks: "reject",
-      maxBytes: MAX_LEGACY_EXEC_APPROVALS_BYTES,
-    });
-    const target = targetPath(source);
-    await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-    await fs.writeFile(target, opened.buffer, { mode: 0o600, flag: "wx" });
-  }
+  await execApprovals.copySources();
   const versions = publishStateDatabaseVersions(files, inspected);
-  const pluginPaths = await copyUpdateCandidatePlugins(plugins, input);
-  return { versions, pluginPaths };
+  const pluginCodeLinks: UpdateCandidatePluginCodeLink[] = [];
+  const pluginPaths = await copyUpdateCandidatePlugins(plugins, {
+    ...input,
+    onCodeLink: (fact) => {
+      pluginCodeLinks.push(fact);
+    },
+  });
+  return {
+    versions,
+    pluginPaths,
+    pluginCodeLinks: await sealUpdateCandidatePluginCodeLinks(
+      input.pluginPlanPath,
+      pluginCodeLinks,
+    ),
+  };
 }

@@ -4,6 +4,7 @@ import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { observeSessionMaintenanceChanges } from "../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
 import { collectSessionMaintenancePreserveKeys } from "../config/sessions/store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "../config/sessions/store-maintenance.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
@@ -37,6 +38,7 @@ vi.mock("./worker-environments/placement-disk-space.js", async (importOriginal) 
   createWorkerPlacementDiskSpaceMonitor: runtimeFactoryMocks.createDiskSpace,
 }));
 
+import { getRuntimeConfig } from "../config/config.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 
 type PlacementFixture = {
@@ -103,6 +105,7 @@ function createMaintenanceRuntime(params: {
     stop,
   };
   const runtime = createGatewayWorkerPlacementRuntime({
+    getCommittedRuntimeConfig: getRuntimeConfig,
     cancelSessionWork: vi.fn(async () => {}),
     placements: {
       workspaceResultInstanceId: () => "gateway-test",
@@ -260,7 +263,9 @@ describe("worker placement session maintenance ownership", () => {
           );
 
         try {
+          const sentinelArchived = observeSessionMaintenanceChanges(storePath, sentinelKey);
           await triggerMaintenance();
+          await sentinelArchived;
           await vi.waitFor(() => {
             expect(loadSessionEntry(sessionScope(sentinelKey))).toMatchObject({
               sessionId: sentinelEntry.sessionId,
@@ -282,7 +287,9 @@ describe("worker placement session maintenance ownership", () => {
               ? undefined
               : vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30 * 60 * 1_000);
           try {
+            const placementArchived = observeSessionMaintenanceChanges(storePath, sessionKey);
             await triggerMaintenance();
+            await placementArchived;
             await vi.waitFor(() => {
               expect(loadSessionEntry(sessionScope(sessionKey))).toMatchObject({
                 sessionId: placement.sessionId,
