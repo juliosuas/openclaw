@@ -1,7 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { disposeAgentHarnessOnce } from "../agents/harness/disposal.js";
 import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/harness/types.js";
 import { getCoreEmbeddingProvider } from "./core-embedding-providers.js";
 import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { invalidateProviderRegistryIndex } from "./provider-registry-index.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { canClaimReservedCommandOwnership } from "./registry-registrars-operations.js";
@@ -104,12 +106,12 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     }
     const normalizedHarness = { ...harness, id, pluginId: harness.pluginId ?? record.id };
     record.agentHarnessIds.push(id);
-    registry.agentHarnesses.push(
-      createRegistration(record, {
-        harness: normalizedHarness,
-        ...(options?.nativeCompaction ? { nativeCompaction: options.nativeCompaction } : {}),
-      }),
-    );
+    const registration = createRegistration(record, {
+      harness: normalizedHarness,
+      ...(options?.nativeCompaction ? { nativeCompaction: options.nativeCompaction } : {}),
+    });
+    registry.agentHarnesses.push(registration);
+    getPluginInstance(record)?.lifecycle.onDispose(() => disposeAgentHarnessOnce(registration.harness));
   };
 
   const registerCliBackend = (record: PluginRecord, backend: CliBackendPlugin) => {

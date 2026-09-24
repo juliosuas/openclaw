@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
+import { withCliCommandCleanup, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -17,7 +19,10 @@ import { revokePluginRecord } from "./registry-lifecycle.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRegistry } from "./registry.js";
 import { disposePluginRegistryInstances, withPluginRegistrationContext } from "./runtime.js";
-import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeRegistryScope,
+} from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import * as sdkAlias from "./sdk-alias.js";
@@ -45,6 +50,64 @@ describe("plugin registration runtime admission", () => {
     const owner = expectDefined(getPluginInstance(record), "registration instance");
     return { builder, record, api, owner, list };
   }
+
+  it("disposes a retired harness before terminal CLI cleanup without closing its live sibling", async () => {
+    const { builder, api, owner } = fixture();
+    const sibling = fixture();
+    const dispose = vi.fn(async () => {});
+    const siblingDispose = vi.fn(async () => {});
+    const harness = {
+      id: "owned",
+      label: "Owned",
+      supports: () => ({ supported: true as const }),
+      runAttempt: async () => {
+        throw new Error("unused");
+      },
+    };
+    api.registerAgentHarness({ ...harness, dispose });
+    sibling.api.registerAgentHarness({ ...harness, dispose: siblingDispose });
+    try {
+      await withCliProcessScope(() =>
+        withCliCommandCleanup(false, async (cleanup) => {
+          const command = expectDefined(cleanup, "CLI cleanup owner");
+          try {
+            withPluginRuntimeRegistryScope(builder.registry, listRegisteredAgentHarnesses);
+            expect(dispose).not.toHaveBeenCalled();
+            expect((await owner.dispose()).errors).toEqual([]);
+            expect(dispose).toHaveBeenCalledOnce();
+            for (const finish of command.harnesses.values()) {
+              await finish();
+            }
+            expect(dispose).toHaveBeenCalledOnce();
+            expect(siblingDispose).not.toHaveBeenCalled();
+          } finally {
+            await command.pluginResources?.release();
+          }
+        }),
+      );
+    } finally {
+      await owner.dispose();
+      await sibling.owner.dispose();
+    }
+    expect(siblingDispose).toHaveBeenCalledOnce();
+  });
+
+  it("preserves harness cleanup failures in the instance disposal result", async () => {
+    const { api, owner } = fixture();
+    const error = new Error("native resource could not close");
+    api.registerAgentHarness({
+      id: "failing",
+      label: "Failing",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw new Error("unused");
+      },
+      dispose: async () => {
+        throw error;
+      },
+    });
+    expect((await owner.dispose()).errors).toContain(error);
+  });
 
   it("allows the canonical synchronous registration call before publication", async () => {
     const { builder, record, api, owner, list } = fixture();

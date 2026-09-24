@@ -12,6 +12,7 @@ import {
   resolveDirectPluginRegistrationOwner,
 } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { disposeAgentHarnessOnce } from "./disposal.js";
 import type {
   AgentHarness,
   AgentHarnessNativeCompaction,
@@ -160,7 +161,7 @@ export async function resetRegisteredAgentHarnessSessions(
 
 async function disposeAgentHarness(harness: AgentHarness): Promise<void> {
   try {
-    await harness.dispose?.();
+    await disposeAgentHarnessOnce(harness);
   } catch (error) {
     log.warn(`${harness.label} dispose hook failed`, { harnessId: harness.id, error });
   }
