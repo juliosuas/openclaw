@@ -6986,13 +6986,22 @@ public struct EnvironmentsListParams: Codable, Sendable {
 public struct EnvironmentsListResult: Codable, Sendable {
     public let environments: [EnvironmentSummary]
     public let profiles: [[String: AnyCodable]]?
+    public let preparedpool: [String: AnyCodable]?
 
     public init(
         environments: [EnvironmentSummary],
-        profiles: [[String: AnyCodable]]? = nil)
+        profiles: [[String: AnyCodable]]? = nil,
+        preparedpool: [String: AnyCodable]? = nil)
     {
         self.environments = environments
         self.profiles = profiles
+        self.preparedpool = preparedpool
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case environments
+        case profiles
+        case preparedpool = "preparedPool"
     }
 }
 
@@ -25276,6 +25285,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
     public let state: WorkerEnvironmentState
     public let agems: Int
     public let idlems: Int?
+    public let destroyrequestedatms: Int?
     public let attachedsessionids: [String]
     public let tunnelstatus: WorkerTunnelStatus
     public let error: String?
@@ -25289,6 +25299,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         state: WorkerEnvironmentState,
         agems: Int,
         idlems: Int? = nil,
+        destroyrequestedatms: Int? = nil,
         attachedsessionids: [String],
         tunnelstatus: WorkerTunnelStatus,
         error: String? = nil,
@@ -25301,6 +25312,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         self.state = state
         self.agems = agems
         self.idlems = idlems
+        self.destroyrequestedatms = destroyrequestedatms
         self.attachedsessionids = attachedsessionids
         self.tunnelstatus = tunnelstatus
         self.error = error
@@ -25315,6 +25327,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         case state
         case agems = "ageMs"
         case idlems = "idleMs"
+        case destroyrequestedatms = "destroyRequestedAtMs"
         case attachedsessionids = "attachedSessionIds"
         case tunnelstatus = "tunnelStatus"
         case error
