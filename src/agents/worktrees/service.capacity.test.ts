@@ -137,7 +137,16 @@ describe("ManagedWorktreeService capacity", () => {
       vi.mocked(fsSync.statfsSync).mockImplementation((target) => {
         const low = isData(target) === (limited === "destination");
         const available = (recovered ? (isData(target) ? 100 : 13) : low ? 3 : 100) * GiB;
-        return { ...stats, bavail: available / 4096, bfree: available / 4096 };
+        return {
+          type: stats.type,
+          bsize: stats.bsize,
+          blocks: stats.blocks,
+          bfree: available / 4096,
+          bavail: available / 4096,
+          files: stats.files,
+          frsize: stats.frsize,
+          ffree: stats.ffree,
+        };
       });
 
       await expect(
