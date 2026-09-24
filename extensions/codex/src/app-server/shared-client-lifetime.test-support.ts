@@ -36,6 +36,7 @@ export function registerSharedClientLifetimeTests(
     async (kind) => {
       vi.useFakeTimers();
       const harness = createClientHarness({ autoEmitExit: false });
+      const stdinClosed = once(harness.process.stdin, "close");
       let finishStart!: (client: CodexAppServerClient) => void;
       const starting = new Promise<CodexAppServerClient>((resolve) => {
         finishStart = resolve;
@@ -57,7 +58,7 @@ export function registerSharedClientLifetimeTests(
       try {
         expect(settled).toBe(false);
         finishStart(harness.client);
-        await vi.advanceTimersByTimeAsync(0);
+        await stdinClosed;
         expect(harness.stdinDestroyed).toBe(true);
         expect(settled).toBe(false);
       } finally {
@@ -91,8 +92,7 @@ export function registerSharedClientLifetimeTests(
 
       for (let attempt = 0; attempt < 3; attempt++) {
         const harness = createClientHarness({ autoEmitExit: false });
-        const validationClosed =
-          mode === "validation" ? once(harness.process.stdin, "close") : null;
+        const stdinClosed = once(harness.process.stdin, "close");
         startSpy.mockImplementationOnce(async () => {
           live.add(harness);
           harness.process.once("exit", () => live.delete(harness));
@@ -121,10 +121,8 @@ export function registerSharedClientLifetimeTests(
         }
         await vi.advanceTimersByTimeAsync(mode === "timeout" ? 50 : 0);
         try {
-          // Catalog registration can await real I/O outside the fake clock.
-          if (validationClosed) {
-            await validationClosed;
-          }
+          // Catalog identity can await real filesystem I/O outside the fake clock.
+          await stdinClosed;
           expect(harness.stdinDestroyed).toBe(true);
           expect(settled).toBe(false);
         } finally {
