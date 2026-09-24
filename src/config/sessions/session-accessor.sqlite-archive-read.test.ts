@@ -24,6 +24,10 @@ import {
 } from "./archive-compression.js";
 import { deleteSessionEntryLifecycle, findTranscriptEvent } from "./session-accessor.js";
 import { withSqliteTranscriptArchiveSession } from "./session-accessor.sqlite-archive-session.js";
+import {
+  MAX_TASK_ARCHIVE_RECORD_BYTES,
+  TASK_ARCHIVE_RECORD_CAPACITY_ERROR,
+} from "./session-accessor.sqlite-archive-stream.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
@@ -133,6 +137,33 @@ describe("SQLite transcript archive reads", () => {
       expect(older?.entries).toEqual([{ event: user, seq: 1 }]);
       expect(older?.nextCursor).toBeUndefined();
       await verifySessionTranscriptArchivePageBindingReadOnly(scope, runId, page.binding);
+      const oversizedSuccessor = archive("successor", {
+        ...answer,
+        message: {
+          ...answer.message,
+          content: "x".repeat(MAX_TASK_ARCHIVE_RECORD_BYTES),
+          __openclaw: { runId: "next-run" },
+        },
+      });
+      const replaceSuccessor = (value: typeof successor) =>
+        write(() => {
+          executeSqliteQuerySync(
+            database.db,
+            getSessionKysely(database.db)
+              .updateTable("session_transcript_archives")
+              .set(value)
+              .where("generation", "=", "successor"),
+          );
+        });
+      replaceSuccessor(oversizedSuccessor);
+      // The capped candidate cannot establish whether the readable match is unique.
+      await expect(readSessionTaskArchivePageReadOnly(scope, { runId })).rejects.toThrow(
+        TASK_ARCHIVE_RECORD_CAPACITY_ERROR,
+      );
+      await expect(
+        verifySessionTranscriptArchivePageBindingReadOnly(scope, runId, page.binding),
+      ).rejects.toThrow(TASK_ARCHIVE_RECORD_CAPACITY_ERROR);
+      replaceSuccessor(successor);
       await expect(
         readSessionTaskArchivePageReadOnly(scope, { ...continuation, runId: "next-run" }),
       ).rejects.toThrow("Invalid archived transcript cursor");

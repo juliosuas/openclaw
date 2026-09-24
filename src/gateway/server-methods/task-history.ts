@@ -325,7 +325,7 @@ export const taskHistoryHandler: GatewayRequestHandler = async (opts) => {
         undefined,
         errorShape(
           ErrorCodes.UNAVAILABLE,
-          "This task contains a transcript record above the 8 MiB preview limit. Its retained history is unchanged, but this record cannot be previewed. Refreshing will not help.",
+          "Task history cannot be previewed because a retained transcript record exceeds the 8 MiB limit. Retained history is unchanged. Refreshing will not help.",
           {
             retryable: false,
             details: { code: GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY },

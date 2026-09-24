@@ -99,8 +99,12 @@ recover a deleted child's entitlement from access to its parent task. Keeping th
 child session preserves its normal sharing checks.
 Oversized text records use the normal history size notice. A single archived
 record above 8 MiB makes Tasks history unavailable before the reader decodes it,
-to bound per-record decoding memory. This read limit does not
-change the retained archive or completion delivery's final-answer scanner.
+to bound per-record decoding memory. This limit also applies to other retained
+generations with the same session key: run membership is stored inside transcript
+records, so an unreadable candidate prevents the reader from establishing a unique
+match, even when the requested run's own archive is small. The reader reports
+unavailable rather than skipping an unclassified generation. This read limit does
+not change retained archives or completion delivery's final-answer scanner.
 Tasks reports this as a non-retryable preview limit; refreshing cannot resolve it.
 
 Terminal failed runs report failure status without replaying captured
