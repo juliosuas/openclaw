@@ -10,6 +10,7 @@ import {
   type TasksHistoryResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { TASK_ARCHIVE_RECORD_CAPACITY_ERROR } from "../../config/sessions/session-accessor.sqlite-archive-stream.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { readSessionHistoryPageInWorker } from "../../config/sessions/session-history-worker-runtime.js";
 import { cronTaskRecordToRunLogEntry } from "../../cron/task-run-detail.js";
@@ -19,6 +20,8 @@ import { prepareTaskRegistryRead } from "../../tasks/runtime-internal.js";
 import { readTaskBackingInstance } from "../../tasks/task-backing-records.js";
 import { resolveTaskHistoryHarness, taskTranscriptSessionKey } from "../../tasks/task-history.js";
 import { isTerminalTaskStatus, type TaskRecord } from "../../tasks/task-registry.types.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { canReadSessionWithoutSharingMetadata } from "../session-sharing-read.js";
 import { canAccessTaskRequesterSession } from "../task-session-access.js";
 import type { GatewayRequestHandler } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -121,12 +124,25 @@ export const taskHistoryHandler: GatewayRequestHandler = async (opts) => {
   const harness = resolveTaskHistoryHarness(task);
   let active = true;
   let archiveStore: { agentId: string | undefined; storePath: string } | undefined;
+  let requireArchiveAccess = false;
+  const archiveAccessAllowed = () => {
+    const projection = getSessionRowProjection(context);
+    if (!sessionKey || !projection) {
+      return false;
+    }
+    return canReadSessionWithoutSharingMetadata({
+      cfg: projection.getPolicyConfig(),
+      client,
+      sessionKey,
+    });
+  };
   const assertCurrent = () => {
     const current = read.getTaskById(task.taskId);
     if (
       !active ||
       opts.signal?.aborted ||
       !allowed(current) ||
+      (requireArchiveAccess && !archiveAccessAllowed()) ||
       historyBinding(current) !== binding ||
       (sessionKey &&
         task.runtime === "subagent" &&
@@ -166,12 +182,14 @@ export const taskHistoryHandler: GatewayRequestHandler = async (opts) => {
     const limit = params.limit ?? 100;
     if (sessionKey) {
       const childAgentId = parseAgentSessionKey(sessionKey)?.agentId ?? task.agentId;
-      if (terminalSubagent && task.runId) {
+      if (terminalSubagent && task.runId && archiveAccessAllowed()) {
         const storePath = resolveSessionStorePathCore(context.getRuntimeConfig().session?.store, {
           agentId: childAgentId,
         });
         archiveStore = { agentId: childAgentId, storePath };
         const { readArchivedTaskHistory } = await import("./task-history-archive.js");
+        requireArchiveAccess = true;
+        assertCurrent();
         const archived = await readArchivedTaskHistory({
           scope: { agentId: childAgentId, storePath, sessionKey },
           runId: task.runId,
@@ -188,6 +206,7 @@ export const taskHistoryHandler: GatewayRequestHandler = async (opts) => {
           publish(archived);
           return;
         }
+        requireArchiveAccess = false;
       }
       if (cursor?.startsWith("archive:")) {
         throw new Error("The recorded task transcript is unavailable");
@@ -298,8 +317,20 @@ export const taskHistoryHandler: GatewayRequestHandler = async (opts) => {
     } else {
       fail("This task has no readable transcript.");
     }
-  } catch {
-    fail("Unable to load this task's transcript. Refresh the task and try again.");
+  } catch (error) {
+    if (error instanceof Error && error.message === TASK_ARCHIVE_RECORD_CAPACITY_ERROR) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "This task contains a transcript record above the 8 MiB preview limit. Its retained history is unchanged, but this record cannot be previewed. Refreshing will not help.",
+          { retryable: false },
+        ),
+      );
+    } else {
+      fail("Unable to load this task's transcript. Refresh the task and try again.");
+    }
   } finally {
     active = false;
   }

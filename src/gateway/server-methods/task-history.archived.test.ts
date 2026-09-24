@@ -9,6 +9,7 @@ import {
   forkSessionEntryFromParentTarget,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { TASK_ARCHIVE_RECORD_CAPACITY_ERROR } from "../../config/sessions/session-accessor.sqlite-archive-stream.js";
 import * as sessionHistory from "../../config/sessions/session-history.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { recordGatewaySessionRunFailure } from "../../sessions/session-run-error.js";
@@ -501,6 +502,16 @@ describe("archived tasks.history", () => {
         task: "Inspect synthetic files",
       });
       markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2 });
+      const viewer = ensureProfileForEmail("archive-viewer@example.test");
+      const kept = await runTaskHandler(
+        "tasks.history",
+        { taskId: task.taskId },
+        {},
+        identifiedClient(["operator.read"], viewer.id),
+        await createHistoryReadContext(),
+      );
+      expect(kept.calls[0]?.[0]).toBe(true);
+      expect(JSON.stringify(kept.payload?.messages)).toContain("First retained message");
       const removed = await deleteSessionEntryLifecycle({
         agentId: "main",
         storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
@@ -519,10 +530,11 @@ describe("archived tasks.history", () => {
         context,
       );
       expect(first.calls[0]?.[0]).toBe(true);
-      expect(first.payload?.messages).toMatchObject([
+      const expectedMessages = [
         { content: [{ type: "text", text: "Second retained message" }] },
         { content: [{ type: "text", text: "[chat.history omitted: message too large]" }] },
-      ]);
+      ];
+      expect(first.payload?.messages).toMatchObject(expectedMessages);
       expect(JSON.stringify(first.payload)).not.toContain("synthetic-private-signature");
       const cursor = expectDefined(
         first.payload?.nextCursor,
@@ -568,7 +580,6 @@ describe("archived tasks.history", () => {
       );
       expect(unavailable.calls).toHaveLength(1);
       expect(unavailable.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
-      const viewer = ensureProfileForEmail("archive-viewer@example.test");
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: requesterSessionKey },
         {
@@ -579,7 +590,31 @@ describe("archived tasks.history", () => {
         },
       );
       const verify = sessionHistory.verifySessionTranscriptArchivePageBindingReadOnly;
-      for (const change of ["requester", "store"] as const) {
+      const admin = identifiedClient(["operator.admin"], viewer.id);
+      const allowed = await runTaskHandler(
+        "tasks.history",
+        { taskId: task.taskId, limit: 2 },
+        {},
+        admin,
+        context,
+      );
+      expect(allowed.calls[0]?.[0]).toBe(true);
+      expect(allowed.payload?.messages).toMatchObject(expectedMessages);
+      const archiveRead = vi.spyOn(sessionHistory, "readSessionTaskArchivePageReadOnly");
+      try {
+        const denied = await runTaskHandler(
+          "tasks.history",
+          { taskId: task.taskId, cursor },
+          {},
+          identifiedClient(["operator.read"], viewer.id),
+          context,
+        );
+        expect(denied.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
+        expect(archiveRead).not.toHaveBeenCalled();
+      } finally {
+        archiveRead.mockRestore();
+      }
+      for (const change of ["requester", "archive", "store"] as const) {
         config = {
           gateway: {
             roles: {
@@ -590,12 +625,16 @@ describe("archived tasks.history", () => {
             },
           },
         };
+        admin.connect.scopes = ["operator.admin"];
         const held = vi
           .spyOn(sessionHistory, "verifySessionTranscriptArchivePageBindingReadOnly")
           .mockImplementationOnce(async (...args) => {
             await verify(...args);
             if (change === "requester") {
+              admin.connect.scopes = ["operator.read"];
               config.gateway!.roles!.definitions.reader!.sessions = { others: "none" };
+            } else if (change === "archive") {
+              admin.connect.scopes = ["operator.read"];
             } else {
               config.session = { store: "changed-archive-store.sqlite" };
             }
@@ -605,7 +644,7 @@ describe("archived tasks.history", () => {
             "tasks.history",
             { taskId: task.taskId },
             config,
-            identifiedClient(["operator.read"], viewer.id),
+            admin,
             context,
           );
           expect(held).toHaveBeenCalledOnce();
@@ -614,6 +653,33 @@ describe("archived tasks.history", () => {
         } finally {
           held.mockRestore();
         }
+      }
+      config = {};
+      admin.connect.scopes = ["operator.admin"];
+      const capacity = vi
+        .spyOn(sessionHistory, "readSessionTaskArchivePageReadOnly")
+        .mockRejectedValueOnce(new Error(TASK_ARCHIVE_RECORD_CAPACITY_ERROR));
+      try {
+        const capacityUnavailable = await runTaskHandler(
+          "tasks.history",
+          { taskId: task.taskId },
+          {},
+          admin,
+          context,
+        );
+        expect(capacity).toHaveBeenCalledOnce();
+        expect(capacityUnavailable.calls[0]).toMatchObject([
+          false,
+          undefined,
+          {
+            code: "UNAVAILABLE",
+            retryable: false,
+            message: expect.stringContaining("8 MiB preview limit"),
+          },
+        ]);
+        expect(capacityUnavailable.calls[0]?.[2]?.message).toContain("Refreshing will not help");
+      } finally {
+        capacity.mockRestore();
       }
     });
   });

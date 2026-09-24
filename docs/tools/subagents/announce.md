@@ -92,10 +92,16 @@ Completion delivery can read an existing registered archive when child cleanup
 finishes before the parent resumes. The Control UI's **Tasks** inspector also
 reads the completed run's retained transcript after cleanup removes its live
 session. Paging stays bound to that run's archive, even if the session key is reused.
+After deletion, child-specific sharing metadata is no longer available. Archived
+previews therefore require existing session access that does not depend on that
+metadata, such as Gateway administrator access. Profile-scoped readers cannot
+recover a deleted child's entitlement from access to its parent task. Keeping the
+child session preserves its normal sharing checks.
 Oversized text records use the normal history size notice. A single archived
 record above 8 MiB makes Tasks history unavailable before the reader decodes it,
 to bound per-record decoding memory. This read limit does not
 change the retained archive or completion delivery's final-answer scanner.
+Tasks reports this as a non-retryable preview limit; refreshing cannot resolve it.
 
 Terminal failed runs report failure status without replaying captured
 reply text. Tool/toolResult output is not promoted into child result text.

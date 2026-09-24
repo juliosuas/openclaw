@@ -1,5 +1,7 @@
 // Allow records above the RPC page budget without unbounded parsing amplification.
 export const MAX_TASK_ARCHIVE_RECORD_BYTES = 8 * 1024 * 1024;
+export const TASK_ARCHIVE_RECORD_CAPACITY_ERROR =
+  "Archived transcript is unavailable because a record exceeds the task-history read capacity.";
 
 /** Frame JSONL and retained multiline JSON as bytes; the caller owns strict JSON validation. */
 export async function* readTranscriptArchiveRecords(
@@ -32,9 +34,7 @@ export async function* readTranscriptArchiveRecords(
         continue;
       }
       if (maxRecordBytes !== undefined && bytes + index - start + 1 > maxRecordBytes) {
-        throw new Error(
-          "Archived transcript is unavailable because a record exceeds the task-history read capacity.",
-        );
+        throw new Error(TASK_ARCHIVE_RECORD_CAPACITY_ERROR);
       }
       if (byte !== 32 && byte !== 9 && byte !== 10 && byte !== 13) {
         hasContent = true;
