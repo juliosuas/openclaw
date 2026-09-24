@@ -35,7 +35,7 @@ import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 
 type ChatMetadataShell = HTMLElement & {
   runtime: { context: ApplicationContext };
-  handleGatewayEvent: (event: { event: string; payload: unknown }) => void;
+  handleGatewayEvent: (event: { event: string; payload?: unknown }) => void;
 };
 
 afterEach(() => {

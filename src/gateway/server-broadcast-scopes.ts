@@ -147,7 +147,7 @@ export function modelMetadataInvalidationFragment(payload: unknown): string | un
       !field?.enumerable ||
       !("value" in field) ||
       typeof field.value !== "boolean" ||
-      (key === "modelSelectionChanged" && field.value !== true)
+      (key === "modelSelectionChanged" && !field.value)
     ) {
       return undefined;
     }
