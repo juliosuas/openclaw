@@ -46,6 +46,7 @@ import {
   isSidebarAttentionDismissed,
   isUpdateAttentionForced,
   loadDismissals,
+  resolveSidebarAttentionKey,
   resolveUpdateAttentionDismissal,
 } from "./sidebar-attention-dismissals.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
@@ -175,7 +176,7 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     overlaySnapshot?.updateSchedule?.campaign?.state !== "applying" &&
     !isUpdateAttentionForced(overlaySnapshot?.updateStatusBanner?.tone) &&
     isSidebarAttentionDismissed(
-      loadDismissals(context.gateway.connection.gatewayUrl),
+      loadDismissals(resolveSidebarAttentionKey(context.gateway)),
       updateAttentionDismissal,
     ),
   );
@@ -187,7 +188,6 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     updateAttentionDismissed,
     profileViewer: selfUser ? { ...selfUser, watchedSessions: [] } : undefined,
     canRetryConnection: canRetryGatewayStatus(host.connectionStatus),
-    queuedOutboxCount: host.queuedOutboxCount,
     themeMode: host.themeMode,
     triggerWidth: position.width,
     onTabAway: () => trigger?.focus(),
@@ -344,7 +344,13 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               }
               break;
             case "toggle-pin":
-              void host.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
+              void host.sessionOrganizer.patchSession(
+                session,
+                { pinned: !session.pinned },
+                {
+                  sessionScope: true,
+                },
+              );
               break;
             case "toggle-involving-me":
               void host.sessionOrganizer.setSessionInvolvement(
@@ -399,7 +405,13 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               break;
             case "toggle-archived":
               if (session.archived) {
-                void host.sessionOrganizer.patchSession(session, { archived: false });
+                void host.sessionOrganizer.patchSession(
+                  session,
+                  { archived: false },
+                  {
+                    sessionScope: true,
+                  },
+                );
               } else {
                 void host.sessionOrganizer.archiveSessionWithUndo(session);
               }
