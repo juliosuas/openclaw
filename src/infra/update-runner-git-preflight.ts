@@ -4,6 +4,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { hasErrnoCode } from "./errno.js";
+import { gitCommitPrefixesMatch } from "./git-commit.js";
 import { DEV_BRANCH, resolveDevUpstreamRefs } from "./update-channels.js";
 import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
 import {
@@ -527,7 +528,7 @@ export async function runGitCandidatePreflight(params: {
   refreshedRemotes: readonly string[];
   targetRevision?: string;
   beforeSha?: string | null;
-  beforeRuntimeVerified: boolean;
+  beforeBuiltCommit: string | null;
   beforeGitStaging?: UpdateRunnerOptions["beforeGitStaging"];
   validateCandidate: UpdateRunnerOptions["validateCandidate"];
   prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
@@ -600,10 +601,13 @@ export async function runGitCandidatePreflight(params: {
     localDevBranchExists = upstream.localDevBranchExists;
   }
 
-  // Source can advance without rebuilding. Only verified installed artifacts
-  // make a matching target a no-op; stale runtimes use normal staged activation.
-  const canRetainRuntime = !params.prepareGitExposure && params.beforeRuntimeVerified;
-  if (canRetainRuntime && preflightBaseSha === params.beforeSha) {
+  // Source-only runs have no build provenance. Recovery's restart-safety checks
+  // must not turn their source no-op into snapshotting or service activation.
+  const canSkipActivation =
+    !params.prepareGitExposure &&
+    (params.beforeBuiltCommit === null ||
+      gitCommitPrefixesMatch(params.beforeBuiltCommit, params.beforeSha ?? ""));
+  if (canSkipActivation && preflightBaseSha === params.beforeSha) {
     return { status: "skipped", reason: "already-current" };
   }
   if (params.beforeGitStaging) {
@@ -654,7 +658,7 @@ export async function runGitCandidatePreflight(params: {
       };
     }
     for (const sha of candidates) {
-      if (canRetainRuntime && sha === params.beforeSha) {
+      if (canSkipActivation && sha === params.beforeSha) {
         return { status: "skipped", reason: "already-current" };
       }
       if (sha !== preflightBaseSha) {

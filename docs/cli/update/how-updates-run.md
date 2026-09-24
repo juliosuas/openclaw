@@ -33,7 +33,7 @@ replacement. Choose an empty `OPENCLAW_GIT_DIR` and retry.
 
 If the resolved registry package version equals the installed version without changing
 the selected channel or installation method, or the Git target SHA equals
-`HEAD` and the installed build verifies against that commit, plugin convergence still runs; if plugins and runtime artifacts remain unchanged, the run finishes `skipped` with reason `already-current`. Runtime maintenance can therefore succeed without changing the Git revision. A same-version
+`HEAD` without a recorded build from a different commit, plugin convergence still runs; if plugins and runtime artifacts remain unchanged, the run finishes `skipped` with reason `already-current`. Runtime maintenance can therefore succeed without changing the Git revision. A same-version
 explicit `--channel` or installation-method change finishes successfully.
 Changed plugins restart a running managed Gateway unless `--no-restart` is set; retained exact pins produce the same advisories as a core update without requiring a restart.
 
