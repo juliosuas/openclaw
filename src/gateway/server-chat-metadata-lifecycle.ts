@@ -10,7 +10,11 @@ type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 /** A committed auth change remains successful even if its best-effort UI notification fails. */
 export function broadcastChatMetadataChanged(
   context: Pick<GatewayRequestContext, "broadcast" | "logGateway">,
-  payload: { modelSelectionChanged?: boolean; usageUpdatedAt?: number } = {},
+  payload: {
+    modelSelectionChanged?: boolean;
+    usageUpdatedAt?: number;
+    usageRefreshFailed?: true;
+  } = {},
 ): void {
   try {
     context.broadcast("chat.metadata.changed", payload, { dropIfSlow: true });
@@ -139,8 +143,8 @@ export async function createGatewayChatMetadataLifecycle(params: {
     ) => {
       context = next;
       const unregister = await registerRefreshListeners();
-      const unregisterUsage = onSessionCostUsageUpdated((usageUpdatedAt) => {
-        broadcastChatMetadataChanged(next, { usageUpdatedAt });
+      const unregisterUsage = onSessionCostUsageUpdated((publication) => {
+        broadcastChatMetadataChanged(next, publication);
       });
       const unregisterRolePolicy = onOperatorRolePolicyChanged((change) => {
         if (change.kind === "config" && change.context === next && context === next) {

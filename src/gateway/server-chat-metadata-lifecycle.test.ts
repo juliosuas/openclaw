@@ -107,22 +107,25 @@ function createLifecycle(minimalTestGateway: boolean, warn = vi.fn()) {
   };
 }
 
-it("publishes committed usage without rebuilding metadata and retires its listener on stop", async () => {
-  const broadcast = vi.fn();
-  const { lifecycle: pending, sidecarOwner } = createLifecycle(true);
-  const lifecycle = await pending;
-  await lifecycle.attachContext({ ...context, broadcast }, sidecarOwner.publish);
-  publishSessionCostUsageUpdated();
-  expect(broadcast).toHaveBeenCalledExactlyOnceWith(
-    "chat.metadata.changed",
-    { usageUpdatedAt: expect.any(Number) },
-    { dropIfSlow: true },
-  );
-  expect(mocks.refresh).not.toHaveBeenCalled();
-  await sidecarOwner.stop();
-  publishSessionCostUsageUpdated();
-  expect(broadcast).toHaveBeenCalledTimes(1);
-});
+it.each([false, true])(
+  "publishes usage completion (failed: %s) without rebuilding metadata and retires its listener on stop",
+  async (failed) => {
+    const broadcast = vi.fn();
+    const { lifecycle: pending, sidecarOwner } = createLifecycle(true);
+    const lifecycle = await pending;
+    await lifecycle.attachContext({ ...context, broadcast }, sidecarOwner.publish);
+    publishSessionCostUsageUpdated(failed);
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith(
+      "chat.metadata.changed",
+      { usageUpdatedAt: expect.any(Number), ...(failed ? { usageRefreshFailed: true } : {}) },
+      { dropIfSlow: true },
+    );
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    await sidecarOwner.stop();
+    publishSessionCostUsageUpdated();
+    expect(broadcast).toHaveBeenCalledTimes(1);
+  },
+);
 
 it("retires model choices at its config commit before pending metadata settles", async () => {
   const broadcast = vi.fn();

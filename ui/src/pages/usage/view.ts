@@ -636,11 +636,15 @@ export function renderUsage(props: UsageProps) {
               data.cacheRefresh !== "complete"
                 ? html`
                     <div
-                      class="callout usage-callout usage-cache-warning"
+                      class="callout ${data.cacheRefresh === "failed" ? "warning" : ""} usage-callout usage-cache-warning"
                       role="status"
                       aria-live="polite"
                     >
-                      ${t("usage.cacheStatus.warning")}
+                      ${t(
+                        data.cacheRefresh === "failed"
+                          ? "usage.cacheStatus.paused"
+                          : "usage.cacheStatus.warning",
+                      )}
                     </div>
                   `
                 : nothing

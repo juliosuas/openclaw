@@ -153,6 +153,7 @@ export function createApplicationGateway(
         : undefined;
       snapshot.pluginCapabilities = null;
       snapshot.usageUpdatedAt = undefined;
+      snapshot.usageRefreshFailed = undefined;
       scheduleOfflineIndicator();
     }
     if (metadataObserver.synchronize(previous, snapshot)) {
@@ -193,9 +194,13 @@ export function createApplicationGateway(
           }
         });
     } else if (event.event === "chat.metadata.changed") {
-      const usageUpdatedAt = asOptionalRecord(event.payload)?.usageUpdatedAt;
+      const publication = asOptionalRecord(event.payload);
+      const usageUpdatedAt = publication?.usageUpdatedAt;
       if (typeof usageUpdatedAt === "number" && usageUpdatedAt > (snapshot.usageUpdatedAt ?? 0)) {
-        setSnapshot({ usageUpdatedAt });
+        setSnapshot({
+          usageUpdatedAt,
+          usageRefreshFailed: publication?.usageRefreshFailed === true,
+        });
       }
     } else if (event.event === "gateway.suspension") {
       const suspensionPhase = readSuspensionPhase(event.payload);

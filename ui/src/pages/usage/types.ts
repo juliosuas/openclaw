@@ -83,7 +83,7 @@ type UsageDataState = {
   totals: UsageTotals | null;
   aggregates: UsageAggregates | null;
   costDaily: CostDailyEntry[];
-  cacheRefresh: "complete" | "retrying";
+  cacheRefresh: "complete" | "retrying" | "failed";
   providerUsage: ProviderUsageSummary["providers"];
   /** The gateway never converged the refresh; the empty list is not an answer. */
   providerUsageStalled: boolean;

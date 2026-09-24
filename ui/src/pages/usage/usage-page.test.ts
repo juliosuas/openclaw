@@ -35,8 +35,16 @@ describe("UsagePage cache convergence", () => {
 
     expect(page.querySelector(".usage-overview-card")).not.toBeNull();
     expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(1);
+    context.setGatewaySnapshot({ usageUpdatedAt: Date.now(), usageRefreshFailed: true });
+    await vi.advanceTimersByTimeAsync(0);
+    await page.updateComplete;
+    expect(page.querySelector(".usage-cache-warning.warning")?.textContent).toContain(
+      "Automatic checks paused",
+    );
+    expect(page.querySelector(".usage-overview-card")).not.toBeNull();
+    expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(1);
     snapshot = cacheSnapshot("fresh");
-    const publication = { usageUpdatedAt: Date.now() };
+    const publication = { usageUpdatedAt: Date.now() + 1, usageRefreshFailed: false };
     context.setGatewaySnapshot(publication);
     context.setGatewaySnapshot(publication);
     await vi.advanceTimersByTimeAsync(0);
@@ -78,7 +86,9 @@ describe("UsagePage cache convergence", () => {
       const request = vi.fn(async (method: string) =>
         method === "usage.status" ? { updatedAt: 1, providers: [] } : result,
       );
-      const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+      const client = { request } as unknown as GatewayBrowserClient;
+      const context = contextWithClient(client);
+      const page = await createPage(client, true, context);
       await preloadUsage(page);
 
       expect(Boolean(page.querySelector(".usage-loading-card"))).toBe(!committed);
@@ -95,6 +105,20 @@ describe("UsagePage cache convergence", () => {
       expect(page.querySelector(".usage-cache-warning.warning")).toBeNull();
       expect(Boolean(page.querySelector(".usage-overview-card"))).toBe(committed);
       expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(1);
+      context.setGatewaySnapshot({ usageUpdatedAt: 1, usageRefreshFailed: true });
+      await vi.advanceTimersByTimeAsync(0);
+      await page.updateComplete;
+      expect(page.querySelector(".usage-loading-card")).toBeNull();
+      expect(page.querySelector(".usage-cache-warning.warning")?.textContent).toContain(
+        "Automatic checks paused",
+      );
+      expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(1);
+      refreshButton(page).click();
+      await vi.advanceTimersByTimeAsync(0);
+      await page.updateComplete;
+      expect(page.querySelector(".usage-cache-warning.warning")).toBeNull();
+      expect(Boolean(page.querySelector(".usage-loading-card"))).toBe(!committed);
+      expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(2);
     },
   );
 
@@ -207,9 +231,14 @@ describe("UsagePage cache convergence", () => {
     expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(2);
   });
 
-  it.each(["before", "during"] as const)(
-    "adopts a preload publication %s the usage request without losing or duplicating its refresh",
-    async (publication) => {
+  it.each([
+    { publication: "before", failed: false },
+    { publication: "during", failed: false },
+    { publication: "before", failed: true },
+    { publication: "during", failed: true },
+  ])(
+    "adopts a preload publication $publication the request (failed: $failed) without losing or duplicating its refresh",
+    async ({ publication, failed }) => {
       vi.useFakeTimers();
       focusDocument();
       let snapshot = cacheSnapshot("stale");
@@ -222,8 +251,10 @@ describe("UsagePage cache convergence", () => {
       context.setGatewaySnapshot({ hello: gatewayHelloForMethods(["sessions.usage"]) });
       const page = await createPage(client, true, context);
       const publish = () => {
-        snapshot = cacheSnapshot("fresh");
-        context.setGatewaySnapshot({ usageUpdatedAt: 1 });
+        if (!failed) {
+          snapshot = cacheSnapshot("fresh");
+        }
+        context.setGatewaySnapshot({ usageUpdatedAt: 1, usageRefreshFailed: failed });
       };
       const preload = preloadUsage(page);
       if (publication === "before") {
@@ -239,9 +270,12 @@ describe("UsagePage cache convergence", () => {
       await vi.advanceTimersByTimeAsync(0);
       await page.updateComplete;
       expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(
-        publication === "before" ? 1 : 2,
+        publication === "during" && !failed ? 2 : 1,
       );
-      expect(page.querySelector(".usage-cache-warning")).toBeNull();
+      expect(Boolean(page.querySelector(".usage-cache-warning"))).toBe(failed);
+      expect(Boolean(page.querySelector(".usage-cache-warning.warning"))).toBe(
+        failed && publication === "during",
+      );
     },
   );
 
@@ -292,6 +326,50 @@ describe("UsagePage cache convergence", () => {
 });
 
 describe("UsagePage provider usage outcome", () => {
+  it.each(["idle", "pending", "hidden"] as const)(
+    "preserves the provider retry budget through %s usage publications",
+    async (state) => {
+      vi.useFakeTimers();
+      focusDocument();
+      const visibility = vi.spyOn(document, "visibilityState", "get");
+      let providerUsageRefreshing = true;
+      let heldUsage: ReturnType<typeof deferred<SessionsUsageResult>> | undefined;
+      const client = {
+        request: vi.fn(async (method: string) =>
+          method === "usage.status"
+            ? { updatedAt: 1, providers: [], refreshing: providerUsageRefreshing }
+            : (heldUsage?.promise ?? cacheSnapshot("fresh").result),
+        ),
+      } as unknown as GatewayBrowserClient;
+      const context = contextWithClient(client);
+      const page = await createPage(client, false, context);
+      await preloadUsage(page);
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        let pending: Promise<void> | undefined;
+        if (state === "pending") {
+          heldUsage = deferred<SessionsUsageResult>();
+          pending = page.loadUsage();
+        } else if (state === "hidden") {
+          visibility.mockReturnValue("hidden");
+        }
+        context.setGatewaySnapshot({ usageUpdatedAt: attempt + 1 });
+        if (state === "pending") {
+          heldUsage!.resolve(cacheSnapshot("fresh").result);
+          heldUsage = undefined;
+          await pending;
+        } else if (state === "hidden") {
+          visibility.mockReturnValue("visible");
+          window.dispatchEvent(new Event("focus"));
+        }
+        await vi.advanceTimersByTimeAsync(5_000 * 2 ** attempt);
+      }
+      expect(page.providerUsageStalled).toBe(true);
+      providerUsageRefreshing = false;
+      await page.loadUsage();
+      expect(page.providerUsageStalled).toBe(false);
+    },
+  );
+
   it.each(["direct", "preload"] as const)(
     "retries a failed %s provider usage result on the next page activation",
     async (loadSource) => {

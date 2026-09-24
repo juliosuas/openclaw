@@ -524,6 +524,7 @@ export async function executeUsageCostWorker(
       return read();
     }
   };
+  let changed = false;
   for (const { file, row, envelope, rebuild } of stale.slice(0, maxFiles)) {
     control.throwIfCancelled();
     await host("refresh-session", { sessionFile: file.filePath });
@@ -559,8 +560,9 @@ export async function executeUsageCostWorker(
     if (!written) {
       throw new Error(`usage rollup changed while refreshing: ${file.filePath}`);
     }
+    changed = true;
   }
-  return { kind: "refresh" };
+  return { kind: "refresh", changed };
 }
 
 export function usageCostWorkerFailure(

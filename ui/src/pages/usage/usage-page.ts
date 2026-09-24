@@ -61,6 +61,7 @@ class UsagePage extends OpenClawLightDomElement {
   @state() private providerUsageUnavailable = false;
   @state() private providerUsageIncomplete = false;
   @state() private usageError: string | null = null;
+  @state() private usageRefreshFailed = false;
   private readonly initialDateRange = createDefaultUsageDateRange();
   @state() private usageStartDate = this.initialDateRange.startDate;
   @state() private usageEndDate = this.initialDateRange.endDate;
@@ -264,9 +265,11 @@ class UsagePage extends OpenClawLightDomElement {
     };
     this.applyUsageLoadState(data.providerUsage, this.connectionEpoch, data.loadedAtMs);
     this.usageError = data.error;
-    if (data.gatewaySnapshot.usageUpdatedAt !== this.gateway.snapshot?.usageUpdatedAt) {
-      this.refreshPolicy.markLoadDeferred();
-      this.refreshPolicy.request("focus");
+    const publication = this.gateway.snapshot;
+    const usageChanged = data.gatewaySnapshot.usageUpdatedAt !== publication?.usageUpdatedAt;
+    this.usageRefreshFailed = usageChanged && publication?.usageRefreshFailed === true;
+    if (usageChanged && !this.usageRefreshFailed) {
+      this.refreshPolicy.request("publication");
     }
     this.refreshPolicy.flushPending();
   }
@@ -405,6 +408,7 @@ class UsagePage extends OpenClawLightDomElement {
     // so it cannot publish under the newly rendered query controls.
     this.routeDataEnabled = false;
     this.usageError = null;
+    this.usageRefreshFailed = false;
     return this.usageRequest.run([client, refreshSessionKey]);
   }
 
@@ -447,14 +451,16 @@ class UsagePage extends OpenClawLightDomElement {
     void this.context.agents.ensureList();
     const usageChanged = this.usageUpdatedAt !== change.snapshot.usageUpdatedAt;
     this.usageUpdatedAt = change.snapshot.usageUpdatedAt;
+    if (usageChanged) {
+      this.usageRefreshFailed = change.snapshot.usageRefreshFailed === true;
+    }
     if (change.identityChanged || change.becameConnected) {
       this.connectionEpoch = {};
       if (this.routeDataInitialized) {
         this.refreshPolicy.request("reconnect");
       }
-    } else if (usageChanged && this.routeDataInitialized) {
-      this.refreshPolicy.markLoadDeferred();
-      this.refreshPolicy.request("focus");
+    } else if (usageChanged && this.routeDataInitialized && !this.usageRefreshFailed) {
+      this.refreshPolicy.request("publication");
     }
     const sessionKey =
       this.usageSelectedSessions.length === 1 ? this.usageSelectedSessions[0] : undefined;
@@ -514,7 +520,11 @@ class UsagePage extends OpenClawLightDomElement {
         totals: this.usageResult?.totals ?? null,
         aggregates: this.usageResult?.aggregates ?? null,
         costDaily: this.usageCostSummary?.daily ?? [],
-        cacheRefresh: this.usageCacheIncomplete ? "retrying" : "complete",
+        cacheRefresh: this.usageCacheIncomplete
+          ? this.usageRefreshFailed
+            ? "failed"
+            : "retrying"
+          : "complete",
         providerUsage: this.providerUsageSummary?.providers ?? [],
         providerUsageStalled: this.providerUsageStalled,
         providerUsageUnavailable: this.providerUsageUnavailable,

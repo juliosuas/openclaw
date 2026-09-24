@@ -505,7 +505,7 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
       unsubscribeUsage();
     }
     expect(await refresh).toBe("refreshed");
-    expect(published).toHaveBeenCalledExactlyOnceWith(expect.any(Number));
+    expect(published).toHaveBeenCalledExactlyOnceWith({ usageUpdatedAt: expect.any(Number) });
     expect((await loadCostUsageSummaryFromCache(summaryParams)).totals.totalTokens).toBe(30);
   });
 }, 30_000);
@@ -581,11 +581,16 @@ it("preserves the original host failure when lock cleanup fails and retries that
   });
 }, 30_000);
 
-it("reports the failed session in doctor and clears it after successful refresh", async () => {
+it("reports the failed session in doctor and clears it after successful refresh", async ({
+  onTestFinished,
+}) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const agentId = "usage-failure-health";
     const sessionFile = state.path("failed-refresh.jsonl");
     await fs.writeFile(sessionFile, usageLine("failed-refresh"));
+    const published = vi.fn();
+    const unsubscribe = onSessionCostUsageUpdated(published);
+    onTestFinished(unsubscribe);
     const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
     const observer = vi
       .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
@@ -599,6 +604,10 @@ it("reports the failed session in doctor and clears it after successful refresh"
       await expect(
         refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] }),
       ).rejects.toThrow("private transcript content");
+      expect(published).toHaveBeenCalledExactlyOnceWith({
+        usageUpdatedAt: expect.any(Number),
+        usageRefreshFailed: true,
+      });
     } finally {
       observer.mockRestore();
     }
@@ -615,6 +624,8 @@ it("reports the failed session in doctor and clears it after successful refresh"
       "Usage cost cache",
     );
     await refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] });
+    expect(published).toHaveBeenCalledTimes(2);
+    expect(published).toHaveBeenLastCalledWith({ usageUpdatedAt: expect.any(Number) });
     expect(await openUsageCostRefreshFailures(state.env).entries()).toEqual([]);
     note.mockClear();
     await maybeRepairLegacyRuntimeFiles(false, state.env);

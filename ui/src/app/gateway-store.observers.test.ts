@@ -94,17 +94,21 @@ describe("application gateway observer ownership", () => {
     const observed = vi.fn();
     const stop = gateway.subscribe(observed);
     observed.mockClear();
-    const publish = (usageUpdatedAt: number) =>
+    const publish = (usageUpdatedAt: number, usageRefreshFailed = false) =>
       current().opts.onEvent?.({
         type: "event",
         event: "chat.metadata.changed",
-        payload: { usageUpdatedAt },
+        payload: { usageUpdatedAt, usageRefreshFailed },
       });
     for (const usageUpdatedAt of [20, 20, 10]) {
       publish(usageUpdatedAt);
     }
     expect(gateway.snapshot.usageUpdatedAt).toBe(20);
     expect(observed).toHaveBeenCalledOnce();
+    publish(21, true);
+    expect(gateway.snapshot.usageRefreshFailed).toBe(true);
+    publish(22);
+    expect(gateway.snapshot.usageRefreshFailed).toBe(false);
     current().opts.onClose?.({ code: 1001, reason: "restart", willRetry: true });
     expect(gateway.snapshot.usageUpdatedAt).toBeUndefined();
     current().opts.onHello?.(HELLO);

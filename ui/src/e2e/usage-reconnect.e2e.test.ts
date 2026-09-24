@@ -211,11 +211,22 @@ suite.define(() => {
         .toEqual({ visibility: "visible", focused: true });
       await expect.poll(() => page.locator(".usage-loading-card").count()).toBe(1);
       await captureProof(page, "usage-original-response.png");
-      await gateway.setMethodResponse("sessions.usage", partialSessions);
-      await gateway.emitGatewayEvent("chat.metadata.changed", { usageUpdatedAt: ++usageUpdatedAt });
+      const beforeFailure = await requestCount(gateway, "sessions.usage");
+      await gateway.emitGatewayEvent("chat.metadata.changed", {
+        usageUpdatedAt: ++usageUpdatedAt,
+        usageRefreshFailed: true,
+      });
+      await expect
+        .poll(() => page.locator(".usage-cache-warning.warning").textContent())
+        .toContain("Automatic checks paused");
+      expect(await page.locator(".usage-loading-card").count()).toBe(0);
+      expect(await requestCount(gateway, "sessions.usage")).toBe(beforeFailure);
+      await captureProof(page, "usage-failed-no-rollup.png");
       const refresh = page
         .locator("openclaw-usage-page")
         .getByRole("button", { name: "Refresh", exact: true });
+      await gateway.setMethodResponse("sessions.usage", partialSessions);
+      await refresh.click();
       for (const entry of ["route", "manual"] as const) {
         if (entry === "manual") {
           await gateway.setMethodResponse("sessions.usage", partialSessions);

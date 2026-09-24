@@ -24,6 +24,7 @@ export type ApplicationGatewaySnapshot = {
   hello: GatewayHelloOk | null;
   pluginCapabilities?: PluginsUiDescriptorsResult | null;
   usageUpdatedAt?: number;
+  usageRefreshFailed?: boolean;
   canvasPluginSurfaceUrl: string | null;
   assistantAgentId: string | null;
   sessionKey: string;
