@@ -183,9 +183,17 @@ suite.define(() => {
     const fresh = { status: "fresh" as const, cachedFiles: 2, pendingFiles: 0, staleFiles: 0 };
     const partialSessions = sessionsUsage(refreshing, "Historical lineage", partialTotals);
     const freshSessions = sessionsUsage(fresh, "Historical lineage", freshTotals);
+    // Reproduce the original API response separately from the fixed stale-rollup response.
+    const originalResponse = {
+      ...partialSessions,
+      totals: Object.fromEntries(Object.keys(totals).map((key) => [key, 0])),
+      sessions: partialSessions.sessions.map((session) => ({ ...session, usage: null })),
+      aggregates: { ...partialSessions.aggregates, daily: [], costDaily: [] },
+    };
+    let usageUpdatedAt = Date.now();
     const gateway = await installMockGateway(page, {
       methodResponses: {
-        "sessions.usage": partialSessions,
+        "sessions.usage": originalResponse,
         "usage.status": { updatedAt: Date.now(), providers: [] },
       },
     });
@@ -201,6 +209,10 @@ suite.define(() => {
           })),
         )
         .toEqual({ visibility: "visible", focused: true });
+      await expect.poll(() => page.locator(".usage-loading-card").count()).toBe(1);
+      await captureProof(page, "usage-original-response.png");
+      await gateway.setMethodResponse("sessions.usage", partialSessions);
+      await gateway.emitGatewayEvent("chat.metadata.changed", { usageUpdatedAt: ++usageUpdatedAt });
       const refresh = page
         .locator("openclaw-usage-page")
         .getByRole("button", { name: "Refresh", exact: true });
@@ -215,13 +227,17 @@ suite.define(() => {
         await expect.poll(() => refresh.isEnabled()).toBe(true);
         expect(await page.locator(".usage-callout.danger").count()).toBe(0);
 
+        await captureProof(page, `usage-cache-${entry}-refreshing.png`);
         const sessionsBefore = await requestCount(gateway, "sessions.usage");
-        // Only server data changes. Publish it before optional slow media capture so
-        // recording cannot spend the production retry budget on old fixture data.
+        const catalogsBefore = await requestCount(gateway, "models.list");
         await gateway.setMethodResponse("sessions.usage", freshSessions);
+        const publication = { usageUpdatedAt: ++usageUpdatedAt };
+        await gateway.emitGatewayEvent("chat.metadata.changed", publication);
+        await gateway.emitGatewayEvent("chat.metadata.changed", publication);
         await expect
           .poll(() => requestCount(gateway, "sessions.usage"), { timeout: 10_000 })
-          .toBeGreaterThan(sessionsBefore);
+          .toBe(sessionsBefore + 1);
+        expect(await requestCount(gateway, "models.list")).toBe(catalogsBefore);
         await expect
           .poll(() => usageBadges(page))
           .toEqual(["320 Tokens", "$0.01 Cost", "1 session"]);

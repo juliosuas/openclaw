@@ -58,6 +58,7 @@ export type SessionUsageEntry = {
   modelProvider?: string;
   model?: string;
   usage: SessionCostSummary | null;
+  computing?: boolean;
   /** Context availability without transferring the full report in overview queries. */
   hasContextWeight?: boolean;
   contextWeight?: SessionSystemPromptReport | null;

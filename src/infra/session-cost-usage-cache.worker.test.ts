@@ -22,6 +22,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import * as usageCacheSqlite from "./session-cost-usage-cache.sqlite.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
+import { onSessionCostUsageUpdated } from "./session-cost-usage-events.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
 import { openUsageCostRefreshFailures } from "./session-cost-usage-refresh-health.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
@@ -427,6 +428,8 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
         },
       });
     });
+    const published = vi.fn();
+    const unsubscribeUsage = onSessionCostUsageUpdated(published);
     const refresh = refreshCostUsageCacheForAgent({ agentId }).then((result) => {
       refreshFinished = true;
       return result;
@@ -455,16 +458,22 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
         requestRefresh: false,
       });
       const partial = loadCostUsageSummaryFromCache(summaryParams);
+      const stale = loadSessionCostSummariesFromCache({
+        agentId,
+        sessions: [{ sessionFile: growingFile }],
+        requestRefresh: false,
+      });
       const evidence = createWorkerPlacementSessionEvidenceResolver([placement]).then((resolve) =>
         resolve(placement),
       );
-      reads.push(fresh, partial, evidence);
-      const [freshResult, partialResult, placementEvidence] = await withTestTimeout(
-        Promise.all([fresh, partial, evidence]),
+      reads.push(fresh, partial, evidence, stale);
+      const [freshResult, partialResult, placementEvidence, staleResult] = await withTestTimeout(
+        Promise.all([fresh, partial, evidence, stale]),
         10_000,
         "Usage reads waited for the blocked refresh writer",
       );
       expect(refreshFinished).toBe(false);
+      expect(published).not.toHaveBeenCalled();
       expect(placementEvidence).toBe("absent");
       expect(observed.refreshWorkers.size).toBeGreaterThan(0);
       for (const worker of observed.refreshWorkers) {
@@ -478,12 +487,25 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
         cachedFiles: 2,
         staleFiles: 1,
       });
+      expect(staleResult.summaries[0]).toMatchObject({
+        totalTokens: 10,
+        refreshing: true,
+        computedAt: expect.any(Number),
+        staleSince: expect.any(Number),
+      });
+      expect(staleResult.cacheStatus).toMatchObject({
+        status: "refreshing",
+        cachedFiles: 1,
+        staleFiles: 1,
+      });
     } finally {
       releaseWrite.resolve();
       await Promise.allSettled([refresh, ...reads]);
       observer.mockRestore();
+      unsubscribeUsage();
     }
     expect(await refresh).toBe("refreshed");
+    expect(published).toHaveBeenCalledExactlyOnceWith(expect.any(Number));
     expect((await loadCostUsageSummaryFromCache(summaryParams)).totals.totalTokens).toBe(30);
   });
 }, 30_000);

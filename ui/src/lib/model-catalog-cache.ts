@@ -29,7 +29,11 @@ export function modelCatalogEventInvalidation(
     return "clear";
   }
   if (event.event === "chat.metadata.changed") {
-    return asNullableRecord(event.payload)?.modelSelectionChanged === true ? "clear" : "refresh";
+    const payload = asNullableRecord(event.payload);
+    if (payload?.modelSelectionChanged === true) {
+      return "clear";
+    }
+    return typeof payload?.usageUpdatedAt === "number" ? undefined : "refresh";
   }
   return undefined;
 }

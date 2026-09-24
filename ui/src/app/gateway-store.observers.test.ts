@@ -87,6 +87,33 @@ describe("application gateway observer ownership", () => {
     vi.restoreAllMocks();
   });
 
+  it("retains each usage publication once until its connection retires", () => {
+    const { gateway, current } = createGatewayStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+    const observed = vi.fn();
+    const stop = gateway.subscribe(observed);
+    observed.mockClear();
+    const publish = (usageUpdatedAt: number) =>
+      current().opts.onEvent?.({
+        type: "event",
+        event: "chat.metadata.changed",
+        payload: { usageUpdatedAt },
+      });
+    for (const usageUpdatedAt of [20, 20, 10]) {
+      publish(usageUpdatedAt);
+    }
+    expect(gateway.snapshot.usageUpdatedAt).toBe(20);
+    expect(observed).toHaveBeenCalledOnce();
+    current().opts.onClose?.({ code: 1001, reason: "restart", willRetry: true });
+    expect(gateway.snapshot.usageUpdatedAt).toBeUndefined();
+    current().opts.onHello?.(HELLO);
+    publish(1);
+    expect(gateway.snapshot.usageUpdatedAt).toBe(1);
+    stop();
+    gateway.stop();
+  });
+
   it("invalidates palette automation reads before delivering owner events and reconnects", async () => {
     const { gateway, current } = createGatewayStore();
     gateway.start();

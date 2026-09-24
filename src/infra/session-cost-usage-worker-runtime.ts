@@ -44,6 +44,7 @@ import {
   type SessionCostUsageRollupSnapshot,
 } from "./session-cost-usage-cache.kernel.js";
 import { prepareSessionCostUsageRefreshLock } from "./session-cost-usage-cache.sqlite.js";
+import { publishSessionCostUsageUpdated } from "./session-cost-usage-events.js";
 import {
   createUsageCostResolver,
   resolveUsageCostPricingFingerprint,
@@ -211,6 +212,7 @@ export async function runUsageCostWorker(
   const location = structuredClone(prepared.location);
   const capturedOperation = structuredClone(operation);
   const signal = getAsyncWorkSignal();
+  let committed = false;
   return withSessionCostUsageWorkerDatabases(prepared.databases, async (scope) => {
     const bindings = prepared.databases.map((options) => {
       const memory = isIncognitoOpenClawAgentSqlitePath(options.path, options);
@@ -313,7 +315,7 @@ export async function runUsageCostWorker(
       // Cleanup custody exists before acquisition can wait or commit its token.
       scope.retainCleanup(lock.release);
       if (!(await lock.acquire())) {
-        return { kind: "busy" };
+        return { kind: "busy" } as const;
       }
     }
     assertCurrent();
@@ -502,6 +504,7 @@ export async function runUsageCostWorker(
                     blob: request.input.blob,
                     updatedAt: request.input.updatedAt,
                   });
+                  committed ||= output;
                   if (output && failedKeys.has(failureKey(request.input.key))) {
                     await failures
                       .delete(failureKey(request.input.key), {
@@ -555,6 +558,11 @@ export async function runUsageCostWorker(
         }
       }
       throw failure;
+    }
+  }).finally(() => {
+    // Publish once after the worker and its accepted writes have settled.
+    if (committed && !signal?.aborted) {
+      publishSessionCostUsageUpdated();
     }
   });
 }

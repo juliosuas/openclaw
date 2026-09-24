@@ -23,6 +23,7 @@ export type ApplicationGatewaySnapshot = {
   /** Transport identity stays stable while plugin capability fields are refreshed. */
   hello: GatewayHelloOk | null;
   pluginCapabilities?: PluginsUiDescriptorsResult | null;
+  usageUpdatedAt?: number;
   canvasPluginSurfaceUrl: string | null;
   assistantAgentId: string | null;
   sessionKey: string;

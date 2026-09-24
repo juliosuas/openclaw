@@ -9,6 +9,7 @@ import { subscribeStoredChatOutboxChanges } from "../lib/chat/outbox-store.ts";
 import { createInitialCronState, loadCronStatus } from "../lib/cron/index.ts";
 import { loadCompactCronJobsPage } from "../lib/cron/jobs.ts";
 import { loadModelAuthStatus, nextModelAuthStatusRefreshAt } from "../lib/model-auth.ts";
+import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   dismissSidebarAttention,
@@ -76,7 +77,7 @@ export class SidebarAttentionStoreController implements StoreController {
           this.load(false);
         } else if (event.event === "config.changed") {
           this.load();
-        } else if (event.event === "chat.metadata.changed") {
+        } else if (modelCatalogEventInvalidation(event)) {
           this.load(true, false);
         }
       }),

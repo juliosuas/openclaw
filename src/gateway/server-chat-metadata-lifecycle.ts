@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { onSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { onOperatorRolePolicyChanged } from "./operator-role-policy.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -9,7 +10,7 @@ type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 /** A committed auth change remains successful even if its best-effort UI notification fails. */
 export function broadcastChatMetadataChanged(
   context: Pick<GatewayRequestContext, "broadcast" | "logGateway">,
-  payload: { modelSelectionChanged?: boolean } = {},
+  payload: { modelSelectionChanged?: boolean; usageUpdatedAt?: number } = {},
 ): void {
   try {
     context.broadcast("chat.metadata.changed", payload, { dropIfSlow: true });
@@ -138,6 +139,9 @@ export async function createGatewayChatMetadataLifecycle(params: {
     ) => {
       context = next;
       const unregister = await registerRefreshListeners();
+      const unregisterUsage = onSessionCostUsageUpdated((usageUpdatedAt) => {
+        broadcastChatMetadataChanged(next, { usageUpdatedAt });
+      });
       const unregisterRolePolicy = onOperatorRolePolicyChanged((change) => {
         if (change.kind === "config" && change.context === next && context === next) {
           // Retire choices at committed config publication, before replacement catalogs can yield.
@@ -148,6 +152,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
       // must join it before shutdown retires the config and model owners.
       publishSidecars({
         stop: async () => {
+          unregisterUsage();
           unregisterRolePolicy();
           unregister?.();
           await runtime.stop();

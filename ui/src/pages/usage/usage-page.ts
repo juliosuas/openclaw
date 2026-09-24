@@ -97,6 +97,7 @@ class UsagePage extends OpenClawLightDomElement {
   private queryDebounceTimer: number | null = null;
   // The client survives transport reconnects, so retry budgets need a separate epoch.
   private connectionEpoch: object = {};
+  private usageUpdatedAt: number | undefined;
   private routeDataInitialized = false;
   private routeDataEnabled = true;
   private readonly refreshPolicy = new UsageRefreshPolicy({
@@ -263,6 +264,11 @@ class UsagePage extends OpenClawLightDomElement {
     };
     this.applyUsageLoadState(data.providerUsage, this.connectionEpoch, data.loadedAtMs);
     this.usageError = data.error;
+    if (data.gatewaySnapshot.usageUpdatedAt !== this.gateway.snapshot?.usageUpdatedAt) {
+      this.refreshPolicy.markLoadDeferred();
+      this.refreshPolicy.request("focus");
+    }
+    this.refreshPolicy.flushPending();
   }
 
   private ensureInitialData() {
@@ -312,13 +318,11 @@ class UsagePage extends OpenClawLightDomElement {
         this.providerUsageSummary = result.value;
       }
     }
-    // Retained incomplete snapshots still need convergence after a failed load
-    // or reconnect; an unknown failure alone must not create retry work.
-    const incomplete = this.providerUsageIncomplete || this.usageCacheIncomplete;
-    this.refreshPolicy.setLastLoadedAtMs(snapshot.state === "pending" ? null : loadedAtMs, {
-      incomplete,
-      connection,
-    });
+    // Session rollups converge on publication; only provider usage needs timed retries.
+    this.refreshPolicy.setLastLoadedAtMs(
+      snapshot.state === "pending" || this.usageCacheIncomplete ? null : loadedAtMs,
+      { incomplete: this.providerUsageIncomplete, connection },
+    );
   }
 
   private get usageCacheIncomplete(): boolean {
@@ -441,11 +445,16 @@ class UsagePage extends OpenClawLightDomElement {
       return;
     }
     void this.context.agents.ensureList();
+    const usageChanged = this.usageUpdatedAt !== change.snapshot.usageUpdatedAt;
+    this.usageUpdatedAt = change.snapshot.usageUpdatedAt;
     if (change.identityChanged || change.becameConnected) {
       this.connectionEpoch = {};
       if (this.routeDataInitialized) {
         this.refreshPolicy.request("reconnect");
       }
+    } else if (usageChanged && this.routeDataInitialized) {
+      this.refreshPolicy.markLoadDeferred();
+      this.refreshPolicy.request("focus");
     }
     const sessionKey =
       this.usageSelectedSessions.length === 1 ? this.usageSelectedSessions[0] : undefined;
@@ -505,11 +514,7 @@ class UsagePage extends OpenClawLightDomElement {
         totals: this.usageResult?.totals ?? null,
         aggregates: this.usageResult?.aggregates ?? null,
         costDaily: this.usageCostSummary?.daily ?? [],
-        cacheRefresh: this.usageCacheIncomplete
-          ? this.refreshPolicy.incompleteUsageExhausted
-            ? "exhausted"
-            : "retrying"
-          : "complete",
+        cacheRefresh: this.usageCacheIncomplete ? "retrying" : "complete",
         providerUsage: this.providerUsageSummary?.providers ?? [],
         providerUsageStalled: this.providerUsageStalled,
         providerUsageUnavailable: this.providerUsageUnavailable,

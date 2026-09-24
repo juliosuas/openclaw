@@ -8,6 +8,7 @@ import type { RuntimeAuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { publishSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
 import {
   bumpSkillsSnapshotVersion,
   getSkillsSnapshotVersion,
@@ -105,6 +106,23 @@ function createLifecycle(minimalTestGateway: boolean, warn = vi.fn()) {
     warn,
   };
 }
+
+it("publishes committed usage without rebuilding metadata and retires its listener on stop", async () => {
+  const broadcast = vi.fn();
+  const { lifecycle: pending, sidecarOwner } = createLifecycle(true);
+  const lifecycle = await pending;
+  await lifecycle.attachContext({ ...context, broadcast }, sidecarOwner.publish);
+  publishSessionCostUsageUpdated();
+  expect(broadcast).toHaveBeenCalledExactlyOnceWith(
+    "chat.metadata.changed",
+    { usageUpdatedAt: expect.any(Number) },
+    { dropIfSlow: true },
+  );
+  expect(mocks.refresh).not.toHaveBeenCalled();
+  await sidecarOwner.stop();
+  publishSessionCostUsageUpdated();
+  expect(broadcast).toHaveBeenCalledTimes(1);
+});
 
 it("retires model choices at its config commit before pending metadata settles", async () => {
   const broadcast = vi.fn();
