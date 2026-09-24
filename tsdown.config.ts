@@ -874,8 +874,23 @@ const configs: UserConfig[] = [
   }),
   nodeWorkspacePackageBuildConfig("normalization-core"),
   nodeWorkspacePackageBuildConfig("retry"),
+  nodeWorkspacePackageBuildConfig("sdk", {
+    deps: withExternalPackageSubpaths({
+      neverBundle: [
+        "@openclaw/gateway-client",
+        "@openclaw/gateway-protocol",
+        "@openclaw/normalization-core",
+      ],
+    }),
+  }),
   nodeWorkspacePackageBuildConfig("media-core"),
-  nodeWorkspacePackageBuildConfig("acp-core"),
+  nodeWorkspacePackageBuildConfig("acp-core", {
+    entry: {
+      ...buildPackageDistEntriesFromExports("acp-core"),
+      // Preserve the standalone package build's non-exported redactor artifact.
+      "error-format": "packages/acp-core/src/error-format.ts",
+    },
+  }),
   nodeWorkspacePackageBuildConfig("terminal-core", {
     deps: {
       neverBundle: shouldExternalizeTerminalCoreDependency,
