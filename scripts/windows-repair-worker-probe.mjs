@@ -547,7 +547,7 @@ async function runCell(spec) {
   await fs.writeFile(specPath, JSON.stringify(spec));
   const launch = spawnWindowsJobChild(
     process.execPath,
-    ["--import", path.resolve("scripts/tsx.mjs"), fixture, "--observer", specPath],
+    ["--import", new URL("./tsx.mjs", import.meta.url).href, fixture, "--observer", specPath],
     { cwd: process.cwd(), env, stdio: ["ignore", "ignore", "pipe", "ipc"], windowsHide: true },
   );
   assert.ok(launch, "Native Job owner is unavailable");
