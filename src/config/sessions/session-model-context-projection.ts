@@ -151,11 +151,14 @@ function lastArchiveObjectMembers(
   projected: Expression<unknown> = jsonMemberValue(alias),
   keys?: readonly string[],
 ): RawBuilder<string> {
-  const member = sql.ref(alias);
+  const member =
+    /* kysely-allow-raw: private JsonMemberAlias union contains only fixed JSON cursor names. */ sql.ref(
+      alias,
+    );
   return /* kysely-allow-raw: fixed archive envelope members retain JSON.parse's last duplicate key without hydrating discarded values. */ sql<string>`(
-    SELECT json_group_object(${sql.ref(`${alias}.key`)}, ${projected})
+    SELECT json_group_object(${/* kysely-allow-raw: fixed key column on the private JsonMemberAlias union. */ sql.ref(`${alias}.key`)}, ${projected})
     FROM json_each(${value}) AS ${member}
-    WHERE ${sql.ref(`${alias}.id`)} IN ${lastArchiveMemberIds(value, keys)}
+    WHERE ${/* kysely-allow-raw: fixed id column on the private JsonMemberAlias union. */ sql.ref(`${alias}.id`)} IN ${lastArchiveMemberIds(value, keys)}
   )`;
 }
 
@@ -163,20 +166,26 @@ function projectArchiveTranscriptNavigationSql(
   event: Expression<string | Uint8Array>,
 ): RawBuilder<string> {
   const internal = lastArchiveObjectMembers(
-    sql.ref("message_member.value"),
+    /* kysely-allow-raw: fixed JSON cursor value declared by this projection. */ sql.ref(
+      "message_member.value",
+    ),
     "archive_internal",
     undefined,
     ["runId", "steerTargetRunId", "contextFreeCommand", "idempotencyKey"],
   );
   const message = lastArchiveObjectMembers(
-    sql.ref("root_member.value"),
+    /* kysely-allow-raw: fixed JSON cursor value declared by this projection. */ sql.ref(
+      "root_member.value",
+    ),
     "message_member",
     sql`CASE WHEN message_member.key = '__openclaw' AND message_member.type = 'object'
       THEN json(${internal}) ELSE ${jsonMemberValue("message_member")} END`,
     ["role", "display", "idempotencyKey", "provenance", "excludeFromContext", "__openclaw"],
   );
   const details = lastArchiveObjectMembers(
-    sql.ref("root_member.value"),
+    /* kysely-allow-raw: fixed JSON cursor value declared by this projection. */ sql.ref(
+      "root_member.value",
+    ),
     "archive_details",
     undefined,
     ["runId"],

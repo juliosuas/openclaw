@@ -45,6 +45,7 @@ export async function withTranscriptArchiveSelection<T>(
     database = openNodeSqliteDatabase(filename);
     // This private, disposable spool has no durability contract. Bound the page cache
     // and spill sort work to disk instead of moving unbounded JS objects to native heap.
+    // sqlite-allow-raw: fixed scratch schema and connection pragmas; ordinary queries use Kysely.
     database.exec(`
       PRAGMA cache_size = -2048;
       PRAGMA temp_store = FILE;
