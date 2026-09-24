@@ -111,7 +111,9 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       ...(options?.nativeCompaction ? { nativeCompaction: options.nativeCompaction } : {}),
     });
     registry.agentHarnesses.push(registration);
-    getPluginInstance(record)?.lifecycle.onDispose(() => disposeAgentHarnessOnce(registration.harness));
+    getPluginInstance(record)?.lifecycle.onDispose(() =>
+      disposeAgentHarnessOnce(registration.harness),
+    );
   };
 
   const registerCliBackend = (record: PluginRecord, backend: CliBackendPlugin) => {
