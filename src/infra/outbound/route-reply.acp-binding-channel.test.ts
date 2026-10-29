@@ -6,9 +6,12 @@ import type {
   AcpDispatchDeliveryState,
 } from "../../auto-reply/reply/dispatch-acp-delivery.types.js";
 import { createAcpToolMessageEditor } from "../../auto-reply/reply/dispatch-acp-tool-edit.js";
+import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { installRouteReplyFixture } from "../../auto-reply/reply/route-reply.fixture.test-support.js";
 import { routeReply } from "../../auto-reply/reply/route-reply.js";
 import { createAcpTestReplyDispatcher } from "../../auto-reply/reply/test-fixtures/acp-runtime.js";
+import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
+import { deliverInboundReplyWithMessageSendContextCore } from "../../channels/turn/durable-delivery.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { isAcpConversationBindingCurrent } from "./acp-binding-authority.js";
@@ -59,6 +62,7 @@ describe("ACP bound-child replies through the channel route", () => {
         id: "matrix",
         outbound: {
           deliveryMode: "direct",
+          deliveryCapabilities: { durableFinal: { text: true, messageSendingHooks: true } },
           sendText: async ({ text }) => {
             if (failNext) {
               failNext = false; // provider refused before accepting: retryable, provably unsent
@@ -163,6 +167,69 @@ describe("ACP bound-child replies through the channel route", () => {
       }
     },
   );
+
+  /** Normal same-channel turn: dispatcher hook, then the channel's durable final callback. */
+  async function dispatchViaChannelCallback(text: string) {
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) =>
+        deliverInboundReplyWithMessageSendContextCore({
+          cfg: {},
+          channel: "matrix",
+          to: "!room",
+          agentId: "codex-acp",
+          ctxPayload: { SessionKey: authority.targetSessionKey } as FinalizedMsgContext,
+          payload,
+          info: { kind: "final" },
+        }),
+      onError: () => {},
+    });
+    guardAcpTransportHandoff(dispatcher, liveRevocation());
+    dispatcher.sendFinalReply({ text });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+  }
+
+  it.each(Object.keys(states) as (keyof typeof states)[])("dispatcher send, %s", async (state) => {
+    binding.current = states[state];
+    await dispatchViaChannelCallback(state);
+    console.log(`[proof] dispatcher send ${state}:`, JSON.stringify(visible));
+    expect(visible).toEqual(state === "bound" ? ["bound"] : []);
+  });
+
+  it.each(Object.keys(states) as (keyof typeof states)[])(
+    "dispatcher durable retry, restart, %s",
+    async (state) => {
+      failNext = true;
+      await dispatchViaChannelCallback("dispatcher retry");
+      const [row] = await loadPendingDeliveries(fixtures.tmpDir());
+      expect(row?.acpBindingAuthority).toEqual(authority);
+      binding.current = states[state];
+      const { summary, warnings } = await restartRecovery();
+      console.log(`[proof] dispatcher recovery ${state}:`, JSON.stringify(summary), visible);
+      expect(visible).toEqual(state === "bound" ? ["dispatcher retry"] : []);
+      if (state !== "bound") {
+        expect(warnings.join("\n")).toContain("ACP conversation binding was revoked");
+      }
+    },
+  );
+
+  it("recovers a queue entry written before acpBindingAuthority existed", async () => {
+    failNext = true;
+    await deliverOutboundPayloadsInternal({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "pre-upgrade" }],
+    }).catch(() => undefined);
+    const [row] = await loadPendingDeliveries(fixtures.tmpDir());
+    expect(row).toBeDefined();
+    expect(row).not.toHaveProperty("acpBindingAuthority");
+    binding.current = null; // no binding at all: legacy rows are not ACP-gated
+    const { summary } = await restartRecovery();
+    console.log("[proof] legacy queue entry:", JSON.stringify(summary), visible);
+    expect(summary).toMatchObject({ recovered: 1 });
+    expect(visible).toEqual(["pre-upgrade"]);
+  });
 
   it.each(Object.keys(states) as (keyof typeof states)[])("tool edit, %s", async (state) => {
     binding.current = states[state];

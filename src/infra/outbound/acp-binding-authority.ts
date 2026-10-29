@@ -35,3 +35,22 @@ export async function assertAcpConversationBindingCurrent(
     });
   }
 }
+
+// Enumerable so the selection survives context spreads; never serialized into payloads.
+const GATHERED_ACP_BINDING = Symbol.for("openclaw.gatheredAcpConversationBinding");
+type GatheredCarrier = { [GATHERED_ACP_BINDING]?: AcpConversationBindingAuthority };
+
+/** Retains the binding that routed this turn to an ACP child at gather time. */
+export function retainGatheredAcpBinding(
+  ctx: object,
+  authority: AcpConversationBindingAuthority,
+): void {
+  (ctx as GatheredCarrier)[GATHERED_ACP_BINDING] = {
+    ...authority,
+    conversation: { ...authority.conversation },
+  };
+}
+
+export function readGatheredAcpBinding(ctx: object): AcpConversationBindingAuthority | undefined {
+  return (ctx as GatheredCarrier)[GATHERED_ACP_BINDING];
+}

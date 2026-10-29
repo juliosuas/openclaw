@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { retainGatheredAcpBinding } from "../../infra/outbound/acp-binding-authority.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpBoundDeliveryRevocation } from "./dispatch-acp-delivery-binding.js";
 import { createAcpTestReplyDispatcher } from "./test-fixtures/acp-runtime.js";
@@ -89,5 +90,29 @@ describe("createAcpBoundDeliveryRevocation", () => {
       state.readThrows = false;
       state.session = { entry: { spawnedBy: "agent:main:parent" }, acp: {} };
     }
+  });
+
+  it("keeps the gather-selected binding instead of re-resolving it", async () => {
+    // No route facts: gather resolved the binding and retained it on the context.
+    const ctx = { SessionKey: CHILD } as FinalizedMsgContext;
+    retainGatheredAcpBinding(ctx, bindingRecord);
+    state.binding = null; // removed between gather and delivery setup
+    const isRevoked = revocation(ctx);
+    expect(await isRevoked()).toBe(true);
+    expect(await isRevoked.authority).toEqual(bindingRecord);
+    state.binding = bindingRecord;
+    expect(await isRevoked()).toBe(false);
+  });
+
+  it("fails closed when the gathered binding targets another session", async () => {
+    state.binding = bindingRecord;
+    const ctx = { SessionKey: CHILD } as FinalizedMsgContext;
+    retainGatheredAcpBinding(ctx, { ...bindingRecord, targetSessionKey: "agent:other:x" });
+    expect(await revocation(ctx)()).toBe(true);
+  });
+
+  it("never revokes a turn gather did not route through a binding", async () => {
+    state.binding = bindingRecord;
+    expect(await revocation({ SessionKey: CHILD } as FinalizedMsgContext)()).toBe(false);
   });
 });

@@ -9,45 +9,38 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   type AcpConversationBindingAuthority,
   isAcpConversationBindingCurrent,
+  readGatheredAcpBinding,
 } from "../../infra/outbound/acp-binding-authority.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
-import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
-import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 /**
- * The binding that routed this turn to the child: the prepared route facts when the
- * channel attached them, else the conversation's binding read when delivery is set up.
+ * The binding that routed this turn to the child, as selected during gather: the
+ * prepared route facts, else the binding gather resolved and retained. `null` means
+ * a binding was selected for another session, which fails closed.
  */
-async function preparedAcpBinding(
-  cfg: OpenClawConfig,
+function preparedAcpBinding(
   ctx: FinalizedMsgContext,
   sessionKey: string,
-): Promise<AcpConversationBindingAuthority | undefined> {
+): AcpConversationBindingAuthority | null | undefined {
   const facts = readConversationBindingRouteFacts(ctx);
-  if (facts) {
-    return facts.kind === "agent" && facts.targetSessionKey === sessionKey
+  const selected =
+    facts?.kind === "agent"
       ? {
           targetSessionKey: facts.targetSessionKey,
           bindingId: facts.bindingId,
           boundAt: facts.boundAt,
           conversation: { ...facts.bindingConversation },
         }
-      : undefined;
+      : facts
+        ? undefined
+        : readGatheredAcpBinding(ctx);
+  if (!selected) {
+    return undefined;
   }
-  const conversation = resolveConversationBindingContextFromMessage({ cfg, ctx });
-  const binding = conversation
-    ? await getSessionBindingService().resolveByConversationAsync(conversation)
-    : null;
-  return binding?.targetSessionKey === sessionKey
-    ? {
-        targetSessionKey: sessionKey,
-        bindingId: binding.bindingId,
-        boundAt: binding.boundAt,
-        conversation: { ...binding.conversation },
-      }
-    : undefined;
+  return selected.targetSessionKey === sessionKey ? selected : null;
 }
 
 /** `viaDispatcher`: the send is queued in the reply dispatcher, not routed. */
@@ -70,8 +63,7 @@ export function createAcpBoundDeliveryRevocation(
   agentId: string | undefined,
   sessionKey: string,
 ): AcpBoundDeliveryRevocation {
-  // A failed binding read (null) leaves no proof the turn was unbound: treat it as bound to nothing.
-  const authority = preparedAcpBinding(cfg, ctx, sessionKey).catch(() => null);
+  const authority = Promise.resolve(preparedAcpBinding(ctx, sessionKey));
   const isRevoked = async (viaDispatcher = false) => {
     const prepared = await authority;
     if (prepared === undefined) {
@@ -141,7 +133,16 @@ export function guardAcpTransportHandoff(
   if (!isRevoked) {
     return undefined;
   }
-  dispatcher.appendBeforeDeliver?.(async (payload) => ((await isRevoked()) ? null : payload));
+  dispatcher.appendBeforeDeliver?.(async (payload) => {
+    if (await isRevoked()) {
+      return null;
+    }
+    // Channel callbacks that queue a durable send carry the authority to recovery.
+    const acpBindingAuthority = await isRevoked.authority;
+    return acpBindingAuthority
+      ? setReplyPayloadMetadata(payload, { acpBindingAuthority })
+      : payload;
+  });
   const beforeDeliver = async () => {
     if (await isRevoked()) {
       throw new PlatformMessageNotDispatchedError("ACP conversation binding was revoked", {
