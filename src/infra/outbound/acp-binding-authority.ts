@@ -1,0 +1,37 @@
+import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { getSessionBindingService } from "./session-binding-service.js";
+import type { ConversationRef } from "./session-binding.types.js";
+
+/** Durable proof that an ACP child owned a conversation when its reply was queued. */
+export type AcpConversationBindingAuthority = {
+  targetSessionKey: string;
+  bindingId: string;
+  boundAt: number;
+  conversation: ConversationRef;
+};
+
+/** Whether the conversation is still bound to the same child by the same binding. */
+export async function isAcpConversationBindingCurrent(
+  authority: AcpConversationBindingAuthority,
+): Promise<boolean> {
+  const current = await getSessionBindingService()
+    .resolveByConversationAsync(authority.conversation)
+    .catch(() => null);
+  return (
+    current?.bindingId === authority.bindingId &&
+    current.boundAt === authority.boundAt &&
+    current.targetSessionKey === authority.targetSessionKey
+  );
+}
+
+/** Rejects a recovered send whose ACP conversation binding was removed or reassigned. */
+export async function assertAcpConversationBindingCurrent(
+  authority: AcpConversationBindingAuthority | undefined,
+): Promise<void> {
+  if (authority && !(await isAcpConversationBindingCurrent(authority))) {
+    throw new PlatformMessageNotDispatchedError("ACP conversation binding was revoked", {
+      cause: undefined,
+      retryable: false,
+    });
+  }
+}
