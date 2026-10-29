@@ -8,7 +8,7 @@ import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ProgressContinuationCapability } from "../channels/progress-continuation.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import type { AgentAssistantSourceReceipt } from "../infra/agent-events.types.js";
-import type { AcpConversationBindingAuthority } from "../infra/outbound/acp-binding-authority.js";
+import type { AcpConversationBindingAuthority } from "../infra/outbound/acp-binding-authority.types.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";

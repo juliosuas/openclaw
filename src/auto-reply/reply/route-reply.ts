@@ -10,7 +10,7 @@ import type { SessionDeliveryGeneration } from "../../config/sessions/session-de
 import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { AcpConversationBindingAuthority } from "../../infra/outbound/acp-binding-authority.js";
+import type { AcpConversationBindingAuthority } from "../../infra/outbound/acp-binding-authority.types.js";
 import {
   isOutboundDeliveryError,
   PlatformMessageNotDispatchedError,

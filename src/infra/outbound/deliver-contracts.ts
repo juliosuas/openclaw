@@ -16,7 +16,7 @@ import type {
   DeliveryQueueCompletionRetention,
   DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
-import type { AcpConversationBindingAuthority } from "./acp-binding-authority.js";
+import type { AcpConversationBindingAuthority } from "./acp-binding-authority.types.js";
 import type { QueuedDeliveryOwner } from "./deliver-queue-state.js";
 import type {
   OutboundDeliveryQueuePolicy,
