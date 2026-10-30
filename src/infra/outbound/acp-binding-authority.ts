@@ -30,6 +30,23 @@ export async function assertAcpConversationBindingCurrent(
   }
 }
 
+/**
+ * Wraps a native platform-send hook so an ACP child reply re-checks its binding
+ * at each transport handoff (after async media loads), failing closed.
+ */
+export function guardAcpBindingPlatformSend(
+  authority: AcpConversationBindingAuthority | undefined,
+  onPlatformSendDispatch?: () => Promise<void>,
+): (() => Promise<void>) | undefined {
+  if (!authority) {
+    return onPlatformSendDispatch;
+  }
+  return async () => {
+    await assertAcpConversationBindingCurrent(authority);
+    await onPlatformSendDispatch?.();
+  };
+}
+
 // Enumerable so the selection survives context spreads; never serialized into payloads.
 const GATHERED_ACP_BINDING = Symbol.for("openclaw.gatheredAcpConversationBinding");
 type GatheredCarrier = {

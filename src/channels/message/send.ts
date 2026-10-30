@@ -7,7 +7,7 @@ import {
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { DeliveryQueueStateContext } from "../../infra/delivery-queue-state-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { assertAcpConversationBindingCurrent } from "../../infra/outbound/acp-binding-authority.js";
+import { guardAcpBindingPlatformSend } from "../../infra/outbound/acp-binding-authority.js";
 import {
   type OutboundDeliveryResult,
   isOutboundDeliveryError,
@@ -438,12 +438,10 @@ async function sendMessageBatch(
       params.payloads
         .map((payload) => getReplyPayloadMetadata(payload)?.acpBindingAuthority)
         .find(Boolean);
-    const onPlatformSendDispatch = acpBindingAuthority
-      ? async () => {
-          await assertAcpConversationBindingCurrent(acpBindingAuthority);
-          await baseOnPlatformSendDispatch?.();
-        }
-      : baseOnPlatformSendDispatch;
+    const onPlatformSendDispatch = guardAcpBindingPlatformSend(
+      acpBindingAuthority,
+      baseOnPlatformSendDispatch,
+    );
     const assertDirectAdapterHandoff =
       ephemeralWriterAuthorities.length > 0
         ? () => {

@@ -14,9 +14,11 @@ import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { deliverInboundReplyWithMessageSendContextCore } from "../../channels/turn/durable-delivery.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { seedDeliveryQueueEntry } from "../delivery-queue-sqlite.test-support.js";
 import { isAcpConversationBindingCurrent } from "./acp-binding-authority.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { deliverOutboundPayloadsInternal } from "./deliver.js";
+import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import {
   createRecoveryLog,
@@ -230,6 +232,30 @@ describe("ACP bound-child replies through the channel route", () => {
     expect(summary).toMatchObject({ recovered: 1 });
     expect(visible).toEqual(["pre-upgrade"]);
   });
+
+  it.each(["bound", "removed"] as const)(
+    "upgrade: a raw pre-binding (v2026.10.9-shape) row survives recovery, binding %s",
+    async (state) => {
+      failNext = true;
+      await send("upgrade row");
+      const [row] = await loadPendingDeliveries(fixtures.tmpDir());
+      // Rewrite the on-disk row exactly as an older build stored it: no binding field.
+      const { acpBindingAuthority: _dropped, ...legacy } = row!;
+      seedDeliveryQueueEntry({
+        queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+        entry: legacy,
+        stateDir: fixtures.tmpDir(),
+      });
+      const [reloaded] = await loadPendingDeliveries(fixtures.tmpDir());
+      expect(reloaded).not.toHaveProperty("acpBindingAuthority");
+      expect(reloaded?.preparedBatch).toEqual(row?.preparedBatch);
+      binding.current = states[state];
+      const { summary } = await restartRecovery();
+      console.log(`[proof] upgrade raw row, binding ${state}:`, JSON.stringify(summary), visible);
+      expect(summary).toMatchObject({ recovered: 1 });
+      expect(visible).toEqual(["upgrade row"]);
+    },
+  );
 
   it.each(Object.keys(states) as (keyof typeof states)[])("tool edit, %s", async (state) => {
     binding.current = states[state];
